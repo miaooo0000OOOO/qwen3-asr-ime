@@ -2,10 +2,10 @@
 set -euo pipefail
 
 # Check system dependencies
-for pkg in python3-dev libgirepository2.0-dev libglib2.0-dev portaudio19-dev; do
+for pkg in python3-dev libgirepository-2.0-dev libglib2.0-dev portaudio19-dev; do
     if ! dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
         echo "Missing system package: $pkg"
-        echo "Install: sudo apt-get install -y libgirepository2.0-dev libglib2.0-dev portaudio19-dev python3-dev"
+        echo "Install: sudo apt-get install -y libgirepository-2.0-dev libglib2.0-dev portaudio19-dev python3-dev"
         exit 1
     fi
 done
