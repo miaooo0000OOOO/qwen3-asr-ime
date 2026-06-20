@@ -39,14 +39,14 @@ class IMEConfig:
             asr_device="auto",
             asr_quantization="auto",
             asr_api_key="dummy",
-            ipc_socket_path=f"/run/user/{uid}/qwen3-asr-ime.sock",
+            ipc_socket_path=f"{os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{uid}')}/qwen3-asr-ime.sock",
             log_level="INFO",
         )
 
     @classmethod
     def load(cls, path: Path | None = None) -> "IMEConfig":
         if path is None:
-            path = Path.home() / ".config" / "qwen3-asr-ime" / "config.yaml"
+            path = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "qwen3-asr-ime" / "config.yaml"
         defaults = cls.defaults()
         data = {
             "hotkey_device": defaults.hotkey_device,
@@ -66,5 +66,6 @@ class IMEConfig:
         if path.exists():
             with open(path, "r", encoding="utf-8") as f:
                 loaded = yaml.safe_load(f) or {}
-            data.update(loaded)
+            known_keys = set(data.keys())
+            data.update({k: v for k, v in loaded.items() if k in known_keys})
         return cls(**data)

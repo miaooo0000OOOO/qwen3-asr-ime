@@ -22,8 +22,11 @@ class RecognizedText:
 
     @classmethod
     def from_dict(cls, data: dict) -> "RecognizedText":
+        msg_type = data.get("type", "recognized")
+        if msg_type != "recognized":
+            raise ValueError(f"RecognizedText type must be 'recognized', got {msg_type!r}")
         return cls(
-            type=data.get("type", "recognized"),
+            type=msg_type,
             text=data.get("text", ""),
             confidence=data.get("confidence"),
             error=data.get("error"),
@@ -45,15 +48,24 @@ class StateUpdate:
 
     @classmethod
     def from_dict(cls, data: dict) -> "StateUpdate":
+        msg_type = data.get("type", "state")
+        if msg_type != "state":
+            raise ValueError(f"StateUpdate type must be 'state', got {msg_type!r}")
+        state = data.get("state", "idle")
+        allowed_states = ("idle", "recording", "recognizing", "error")
+        if state not in allowed_states:
+            raise ValueError(f"Invalid state: {state!r}; must be one of {allowed_states}")
         return cls(
-            type=data.get("type", "state"),
-            state=data.get("state", "idle"),
+            type=msg_type,
+            state=state,
             message=data.get("message"),
         )
 
 
 def parse_message(line: str) -> RecognizedText | StateUpdate:
     data = json.loads(line)
+    if not isinstance(data, dict):
+        raise ValueError("Message must be a JSON object")
     msg_type = data.get("type")
     if msg_type == "recognized":
         return RecognizedText.from_dict(data)

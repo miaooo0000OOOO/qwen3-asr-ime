@@ -26,3 +26,13 @@ def test_state_update_roundtrip():
 def test_parse_unknown_message_type():
     with pytest.raises(ValueError, match="Unknown message type"):
         parse_message('{"type": "unknown"}')
+
+
+def test_parse_non_object_message():
+    with pytest.raises(ValueError, match="Message must be a JSON object"):
+        parse_message("[]")
+
+
+def test_parse_invalid_state_value():
+    with pytest.raises(ValueError, match="Invalid state"):
+        StateUpdate.from_dict({"type": "state", "state": "invalid"})
