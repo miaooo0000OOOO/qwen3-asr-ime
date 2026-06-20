@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Check system dependencies
+for pkg in python3-dev libgirepository2.0-dev libglib2.0-dev portaudio19-dev; do
+    if ! dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
+        echo "Missing system package: $pkg"
+        echo "Install: sudo apt-get install -y libgirepository2.0-dev libglib2.0-dev portaudio19-dev python3-dev"
+        exit 1
+    fi
+done
+
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG_DIR="${HOME}/.config/qwen3-asr-ime"
 IBUS_COMPONENT_DIR="${HOME}/.ibus/components"
@@ -8,7 +17,7 @@ SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 
 mkdir -p "${CONFIG_DIR}" "${IBUS_COMPONENT_DIR}" "${SYSTEMD_USER_DIR}"
 
-python3 -m pip install -e "${PROJECT_DIR}"
+python3 -m pip install -e "${PROJECT_DIR}[ibus]"
 
 if [[ ! -f "${CONFIG_DIR}/config.yaml" ]]; then
 cat > "${CONFIG_DIR}/config.yaml" <<'EOF'

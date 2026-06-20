@@ -12,7 +12,6 @@ authors = [{name = "Assistant"}]
 urls = {Homepage = "https://github.com/example/qwen3-asr-ime"}
 requires-python = ">=3.10"
 dependencies = [
-    "pygobject>=3.42",
     "pyaudio>=0.2.13",
     "requests>=2.31",
     "evdev>=1.6",
@@ -21,6 +20,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ibus = ["pygobject>=3.42"]
+
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
