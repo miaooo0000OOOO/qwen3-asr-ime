@@ -1,6 +1,3 @@
-# qwen3-asr-ime
+# Qwen3-ASR Linux 语音输入法
 
-Qwen3-ASR based Linux voice input method for IBus.
-
-This project provides a voice-driven input method engine for IBus on Linux,
-leveraging Qwen3-ASR for speech recognition.
+基于 Qwen3-ASR 的 IBus 语音输入法。按住全局热键录音，松开后自动输入识别文本。
