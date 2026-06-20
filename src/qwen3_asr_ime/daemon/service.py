@@ -1,0 +1,133 @@
+from __future__ import annotations
+
+import asyncio
+import os
+import signal
+from pathlib import Path
+
+from qwen3_asr_ime.common.config import IMEConfig
+from qwen3_asr_ime.common.logger import get_logger
+from qwen3_asr_ime.common.protocol import RecognizedText, StateUpdate
+from qwen3_asr_ime.daemon.asr_client import ASRClient
+from qwen3_asr_ime.daemon.hotkey import HotkeyEvent, create_hotkey_listener
+from qwen3_asr_ime.daemon.recorder import AudioConfig, Recorder
+
+logger = get_logger(__name__)
+
+
+class VoiceInputDaemon:
+    def __init__(self, config: IMEConfig):
+        self.config = config
+        self.recorder = Recorder(
+            AudioConfig(
+                sample_rate=config.audio_sample_rate,
+                channels=config.audio_channels,
+                chunk_ms=config.audio_chunk_ms,
+            )
+        )
+        self.asr = ASRClient(config.asr_endpoint, api_key=config.asr_api_key)
+        self.hotkey = create_hotkey_listener(
+            config.hotkey_device,
+            config.hotkey_key,
+            self._on_hotkey,
+        )
+        self._clients: set[asyncio.StreamWriter] = set()
+        self._state: str = "idle"
+        self._server = None
+
+    async def start(self) -> None:
+        socket_path = Path(self.config.ipc_socket_path)
+        socket_path.parent.mkdir(parents=True, exist_ok=True)
+        if socket_path.exists():
+            socket_path.unlink()
+
+        self._server = await asyncio.start_unix_server(
+            self._on_client_connected,
+            path=str(socket_path),
+        )
+        os.chmod(socket_path, 0o600)
+        self.hotkey.start()
+        logger.info("Daemon started, listening on %s", socket_path)
+
+    async def run_forever(self) -> None:
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, self._shutdown)
+        async with self._server:
+            await self._server.serve_forever()
+
+    def _on_hotkey(self, event: HotkeyEvent) -> None:
+        if event.action == "press" and self._state == "idle":
+            self._state = "recording"
+            self.recorder.start()
+            self._broadcast_state("recording", "开始录音")
+            logger.info("Recording started")
+        elif event.action == "release" and self._state == "recording":
+            self._state = "recognizing"
+            self._broadcast_state("recognizing", "识别中...")
+            logger.info("Recording stopped, recognizing")
+            audio_bytes = self.recorder.stop()
+            asyncio.create_task(self._recognize(audio_bytes))
+
+    async def _recognize(self, audio_bytes: bytes) -> None:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, self.asr.recognize, audio_bytes)
+        if result.error:
+            self._broadcast_state("error", f"识别失败: {result.error}")
+            self._broadcast_recognized("", error=result.error)
+        else:
+            self._broadcast_state("idle", None)
+            self._broadcast_recognized(result.text)
+            logger.info("Recognized: %s", result.text)
+
+    def _broadcast_state(self, state: str, message: str | None) -> None:
+        msg = StateUpdate(state=state, message=message).to_json()
+        self._broadcast(msg)
+
+    def _broadcast_recognized(self, text: str, error: str | None = None) -> None:
+        msg = RecognizedText(text=text, error=error).to_json()
+        self._broadcast(msg)
+
+    def _broadcast(self, msg: str) -> None:
+        data = (msg + "\n").encode("utf-8")
+        for writer in list(self._clients):
+            try:
+                writer.write(data)
+                asyncio.create_task(writer.drain())
+            except Exception as exc:
+                logger.warning("Failed to send to client: %s", exc)
+
+    def _on_client_connected(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        self._clients.add(writer)
+        logger.info("IBus engine connected")
+
+        async def read_loop():
+            while True:
+                try:
+                    line = await reader.readline()
+                    if not line:
+                        break
+                except Exception:
+                    break
+
+        asyncio.create_task(read_loop())
+
+    def _shutdown(self) -> None:
+        logger.info("Shutting down daemon")
+        if self._server:
+            self._server.close()
+        self.hotkey.stop()
+        self.recorder.close()
+
+
+async def main():
+    config = IMEConfig.load()
+    daemon = VoiceInputDaemon(config)
+    await daemon.start()
+    await daemon.run_forever()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
