@@ -14,6 +14,13 @@ class HotkeyEvent:
 
 
 class EvdevHotkeyListener:
+    """Hotkey listener that supports chord combos and flex key families.
+
+    - Chord mode (default): all keys in target_codes must be pressed simultaneously.
+    - Flex mode (``_any_mode``): any key in target_codes triggers press (all must
+      be released to trigger release). Used for "CTRL" meaning left OR right Ctrl.
+    """
+
     def __init__(
         self,
         key_combo: str,
@@ -21,27 +28,34 @@ class EvdevHotkeyListener:
     ):
         self.key_combo = key_combo
         self.on_event = on_event
+        self._triggered = False
         self._pressed: set[int] = set()
         self._target_codes = self._parse_combo(key_combo)
+        self._any_mode = len(self._target_codes) <= 2 and "CTRL" in key_combo.upper()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._stop = threading.Event()
 
     @staticmethod
     def _parse_combo(combo: str) -> set[int]:
         import evdev.ecodes as ec
-        name_map = {
+        name_map: dict[str, int] = {
             "SUPER": ec.ecodes["KEY_LEFTMETA"],
             "SHIFT": ec.ecodes["KEY_LEFTSHIFT"],
-            "CTRL": ec.ecodes["KEY_LEFTCTRL"],
+            "CTRL": 0,
             "ALT": ec.ecodes["KEY_LEFTALT"],
         }
         codes: set[int] = set()
         for part in combo.upper().replace("<", "").replace(">", "").split("+"):
             part = part.strip()
-            if part in name_map:
+            if part == "CTRL":
+                codes.add(ec.ecodes["KEY_LEFTCTRL"])
+                codes.add(ec.ecodes["KEY_RIGHTCTRL"])
+            elif part in name_map:
                 codes.add(name_map[part])
             else:
-                codes.add(ec.ecodes.get(f"KEY_{part}", 0))
+                ec_code = ec.ecodes.get(f"KEY_{part}", 0)
+                if ec_code:
+                    codes.add(ec_code)
         return codes
 
     def start(self) -> None:
@@ -51,7 +65,10 @@ class EvdevHotkeyListener:
         self._stop.set()
 
     def _run(self) -> None:
-        devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
+        try:
+            devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
+        except OSError:
+            return
         for dev in devices:
             dev.grab()
         try:
@@ -69,14 +86,31 @@ class EvdevHotkeyListener:
 
     def _handle(self, event: evdev.InputEvent) -> None:
         code = event.code
-        if event.value == 1:
-            self._pressed.add(code)
-            if self._pressed == self._target_codes:
-                self.on_event(HotkeyEvent("press"))
-        elif event.value == 0:
+        from_code = code in self._target_codes
+
+        if event.value == 1:  # key down
+            if from_code:
+                self._pressed.add(code)
+            if self._any_mode:
+                if from_code and not self._triggered:
+                    self._triggered = True
+                    self.on_event(HotkeyEvent("press"))
+            else:
+                self._pressed.add(code)
+                if self._pressed == self._target_codes and not self._triggered:
+                    self._triggered = True
+                    self.on_event(HotkeyEvent("press"))
+
+        elif event.value == 0:  # key up
             if code in self._pressed:
-                self._pressed.remove(code)
-                if code in self._target_codes:
+                self._pressed.discard(code)
+            if self._any_mode:
+                if from_code and self._triggered and not self._pressed & self._target_codes:
+                    self._triggered = False
+                    self.on_event(HotkeyEvent("release"))
+            else:
+                if code in self._target_codes and self._triggered:
+                    self._triggered = False
                     self.on_event(HotkeyEvent("release"))
 
 
@@ -84,3 +118,4 @@ def create_hotkey_listener(device: str, key_combo: str, on_event):
     if device == "evdev":
         return EvdevHotkeyListener(key_combo, on_event)
     raise ValueError(f"Unsupported hotkey device: {device}")
+

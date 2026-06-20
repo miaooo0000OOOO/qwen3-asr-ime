@@ -24,8 +24,7 @@ if [[ ! -f "${CONFIG_DIR}/config.yaml" ]]; then
 cat > "${CONFIG_DIR}/config.yaml" <<'EOF'
 hotkey:
   device: "evdev"
-  key: "<Super>+<Shift>+R"
-audio:
+  key: "CTRL"
   sample_rate: 16000
   channels: 1
   format: "int16"
@@ -86,6 +85,7 @@ $IBUS_XML_CONTENT
 INNEREOF
 
 if sudo cp "$COMPONENT_FILE" /usr/share/ibus/component/qwen3-asr-ime.xml 2>/dev/null; then
+    sudo chmod 644 /usr/share/ibus/component/qwen3-asr-ime.xml
     echo "IBus component installed to /usr/share/ibus/component/"
     rm -f "$COMPONENT_FILE"
 
