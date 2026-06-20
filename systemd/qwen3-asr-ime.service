@@ -1,0 +1,12 @@
+[Unit]
+Description=Qwen3-ASR Voice Input Daemon
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=$(which python3) -m qwen3_asr_ime.daemon.service
+Restart=on-failure
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=default.target
