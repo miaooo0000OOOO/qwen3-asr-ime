@@ -55,8 +55,7 @@ def _type_text_uinput(text: str) -> None:
             _time.sleep(0.005)
             ui.write(e.EV_KEY, e.KEY_SPACE, 0)
             ui.syn()
-            _time.sleep(0.02)
-    finally:
+            _time.sleep(0.1)  # wait for character to commit before next Ctrl+Shift+u
         ui.close()
 
 
