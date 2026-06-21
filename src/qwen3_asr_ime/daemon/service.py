@@ -7,7 +7,7 @@ from pathlib import Path
 
 from qwen3_asr_ime.common.config import IMEConfig
 from qwen3_asr_ime.common.logger import get_logger
-from qwen3_asr_ime.common.protocol import RecognizedText, StateUpdate
+from qwen3_asr_ime.common.protocol import HotkeyCommand, RecognizedText, StateUpdate, parse_message
 from qwen3_asr_ime.daemon.asr_client import ASRClient
 from qwen3_asr_ime.daemon.hotkey import HotkeyEvent, create_hotkey_listener
 from qwen3_asr_ime.daemon.recorder import AudioConfig, Recorder
@@ -48,7 +48,11 @@ class VoiceInputDaemon:
         )
         os.chmod(socket_path, 0o600)
         self.hotkey.start()
-        logger.info("Daemon started, listening on %s", socket_path)
+
+    def _on_hotkey_message(self, msg: HotkeyCommand) -> None:
+        """Handle hotkey commands from GNOME Shell extension over IPC."""
+        logger.debug("IPC hotkey: %s", msg.action)
+        self._on_hotkey(HotkeyEvent(action=msg.action))
 
     async def run_forever(self) -> None:
         loop = asyncio.get_running_loop()
@@ -119,13 +123,28 @@ class VoiceInputDaemon:
         logger.info("IBus engine connected")
 
         async def read_loop():
-            while True:
-                try:
+            try:
+                while True:
                     line = await reader.readline()
                     if not line:
                         break
+                    text = line.decode("utf-8").strip()
+                    if not text:
+                        continue
+                    try:
+                        msg = parse_message(text)
+                        if isinstance(msg, HotkeyCommand):
+                            self._on_hotkey_message(msg)
+                    except Exception:
+                        logger.warning("Invalid message from client: %s", text)
+            except Exception:
+                pass
+            finally:
+                self._clients.discard(writer)
+                try:
+                    writer.close()
                 except Exception:
-                    break
+                    pass
 
         asyncio.create_task(read_loop())
 

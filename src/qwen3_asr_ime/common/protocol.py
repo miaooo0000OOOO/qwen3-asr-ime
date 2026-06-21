@@ -62,7 +62,24 @@ class StateUpdate:
         )
 
 
-def parse_message(line: str) -> RecognizedText | StateUpdate:
+@dataclass(frozen=True, slots=True)
+class HotkeyCommand:
+    """Incoming hotkey command from GNOME Shell extension over IPC."""
+    type: Literal["hotkey"] = "hotkey"
+    action: Literal["press", "release"] = "press"
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "HotkeyCommand":
+        msg_type = data.get("type", "hotkey")
+        if msg_type != "hotkey":
+            raise ValueError(f"HotkeyCommand type must be 'hotkey', got {msg_type!r}")
+        action = data.get("action", "press")
+        if action not in ("press", "release"):
+            raise ValueError(f"Invalid action: {action!r}; must be 'press' or 'release'")
+        return cls(type=msg_type, action=action)
+
+
+def parse_message(line: str) -> RecognizedText | StateUpdate | HotkeyCommand:
     data = json.loads(line)
     if not isinstance(data, dict):
         raise ValueError("Message must be a JSON object")
@@ -71,4 +88,6 @@ def parse_message(line: str) -> RecognizedText | StateUpdate:
         return RecognizedText.from_dict(data)
     if msg_type == "state":
         return StateUpdate.from_dict(data)
+    if msg_type == "hotkey":
+        return HotkeyCommand.from_dict(data)
     raise ValueError(f"Unknown message type: {msg_type}")
