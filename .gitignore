@@ -145,3 +145,29 @@ cython_debug/
 
 # Local overrides
 *.local
+
+# ===== Security & Privacy =====
+# Ignore runtime config (may contain user paths/tokens)
+*.local
+*.override
+**/config.yaml
+**/.env
+**/.env.*
+# Ignore sensitive credential patterns
+*.key
+*.pem
+*.crt
+*.p12
+*.jks
+*.keystore
+credentials*
+secrets*
+token*
+# Ignore local models and data
+/Data2/Models/
+*.gguf
+*.bin  # model weights (allow binary libs)
+!*.so
+# Ignore misc tooling artifacts
+.ruff_cache/
+.ruff_cache
