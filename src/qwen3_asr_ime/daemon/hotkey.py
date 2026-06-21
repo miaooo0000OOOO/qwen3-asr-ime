@@ -114,7 +114,7 @@ class EvdevHotkeyListener:
                     except BlockingIOError:
                         continue
                 if not any_event:
-                    time.sleep(0.005)  # avoid busy loop
+                    time.sleep(0.02)  # 50Hz poll, low CPU
         except Exception:
             logger.exception("Hotkey listener error")
 
