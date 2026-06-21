@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import signal
 from pathlib import Path
 
@@ -89,6 +90,7 @@ class VoiceInputDaemon:
             self._on_hotkey,
         )
         self._clients: set[asyncio.StreamWriter] = set()
+        self._lock = threading.Lock()
         self._state: str = "idle"
         self._server = None
 
@@ -168,7 +170,9 @@ class VoiceInputDaemon:
     def _broadcast(self, msg: str) -> None:
         data = (msg + "\n").encode("utf-8")
         loop = self._loop
-        for writer in list(self._clients):
+        with self._lock:
+            writers = list(self._clients)
+        for writer in writers:
             try:
                 writer.write(data)
                 loop.call_soon_threadsafe(lambda w=writer: asyncio.create_task(w.drain()))
@@ -178,7 +182,8 @@ class VoiceInputDaemon:
     def _on_client_connected(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
-        self._clients.add(writer)
+        with self._lock:
+            self._clients.add(writer)
         logger.info("IBus engine connected")
 
         async def read_loop():
@@ -199,7 +204,8 @@ class VoiceInputDaemon:
             except Exception:
                 pass
             finally:
-                self._clients.discard(writer)
+                with self._lock:
+                    self._clients.discard(writer)
                 try:
                     writer.close()
                 except Exception:
