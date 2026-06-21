@@ -158,6 +158,18 @@ class PynputHotkeyListener:
         self._listener = None
         self._any_mode = len(self._target_codes) <= 2
 
+    def start(self):
+        from pynput import keyboard
+        self._listener = keyboard.Listener(
+            on_press=self._on_press,
+            on_release=self._on_release,
+        )
+        self._listener.start()
+
+    def stop(self):
+        if self._listener:
+            self._listener.stop()
+
     def _key_code(self, key) -> int | None:
         """Convert pynput key to evdev key code using _EC_CODES."""
         try:
