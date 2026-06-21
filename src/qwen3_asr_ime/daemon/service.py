@@ -40,16 +40,18 @@ def _type_text_x11(text: str) -> None:
     except FileNotFoundError:
         _type_hex_fallback(text)
         return
-    # 3. Send Ctrl+V via uinput
+    # 3. Send Ctrl+Shift+V via uinput (works in both terminal and GUI)
     ui = UInput()
     try:
         ui.write(e.EV_KEY, e.KEY_LEFTCTRL, 1)
+        ui.write(e.EV_KEY, e.KEY_LEFTSHIFT, 1)
         ui.syn()
         time.sleep(0.01)
         ui.write(e.EV_KEY, e.KEY_V, 1)
         ui.syn()
         time.sleep(0.01)
         ui.write(e.EV_KEY, e.KEY_V, 0)
+        ui.write(e.EV_KEY, e.KEY_LEFTSHIFT, 0)
         ui.write(e.EV_KEY, e.KEY_LEFTCTRL, 0)
         ui.syn()
         time.sleep(0.05)
