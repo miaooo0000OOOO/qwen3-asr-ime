@@ -131,7 +131,7 @@ class EvdevHotkeyListener:
                     self._triggered = True
                     self.on_event(HotkeyEvent("press"))
             else:
-                self._pressed.add(code)
+                # chord mode: only track target keys
                 if self._pressed == self._target_codes and not self._triggered:
                     self._triggered = True
                     self.on_event(HotkeyEvent("press"))
