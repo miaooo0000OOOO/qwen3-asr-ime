@@ -15,16 +15,62 @@ from qwen3_asr_ime.daemon.recorder import AudioConfig, Recorder
 logger = get_logger(__name__)
 
 
-def _type_text_uinput(text: str) -> None:
-    """Type text using xdotool (reliable, no clipboard)."""
+def _type_text_x11(text: str) -> None:
+    """Type Unicode text via clipboard save/restore + Ctrl+V (<100ms, no trace)."""
     import subprocess
+    import time
+    from evdev import UInput, ecodes as e
+
+    # 1. Save current clipboard
+    old = b""
+    try:
+        old = subprocess.check_output(
+            ["xclip", "-o", "-selection", "clipboard"], timeout=2, stderr=subprocess.DEVNULL
+        )
+    except Exception:
+        pass
+    # 2. Set clipboard to recognized text
     try:
         subprocess.run(
-            ["xdotool", "type", "--delay", "10", text],
-            check=True, timeout=10, capture_output=True,
+            ["xclip", "-selection", "clipboard"],
+            input=text.encode("utf-8"),
+            timeout=2,
         )
-    except subprocess.CalledProcessError as exc:
-        logger.error("xdotool failed: %s", exc)
+    except FileNotFoundError:
+        _type_hex_fallback(text)
+        return
+    # 3. Send Ctrl+V via uinput
+    ui = UInput()
+    try:
+        ui.write(e.EV_KEY, e.KEY_LEFTCTRL, 1)
+        ui.syn()
+        time.sleep(0.01)
+        ui.write(e.EV_KEY, e.KEY_V, 1)
+        ui.syn()
+        time.sleep(0.01)
+        ui.write(e.EV_KEY, e.KEY_V, 0)
+        ui.write(e.EV_KEY, e.KEY_LEFTCTRL, 0)
+        ui.syn()
+        time.sleep(0.05)
+    finally:
+        ui.close()
+    # 4. Restore original clipboard
+    try:
+        subprocess.run(
+            ["xclip", "-selection", "clipboard"],
+            input=old,
+            timeout=2,
+        )
+    except Exception:
+        pass
+
+
+def _type_hex_fallback(text: str) -> None:
+    """Last resort: Ctrl+Shift+u hex input."""
+    import subprocess
+
+    subprocess.run(["xdotool", "type", "--delay", "10", text], timeout=10)
+
 
 class VoiceInputDaemon:
     def __init__(self, config: IMEConfig):
@@ -83,7 +129,7 @@ class VoiceInputDaemon:
                 self._state = "recognizing"
                 self._broadcast_state("recognizing", "🔄 识别中...")
                 audio_bytes = self.recorder.stop()
-                dur = len(audio_bytes) / 32000  # 16kHz 16bit 单声道
+                dur = len(audio_bytes) / 32000
                 logger.info(
                     "⬆ Ctrl 松开 → 停止录音 (%.1f 秒, %d KB)", dur, len(audio_bytes) // 1024
                 )
@@ -108,9 +154,8 @@ class VoiceInputDaemon:
             self._broadcast_state("idle", "🎤 就绪")
             self._broadcast_recognized(result.text)
             logger.info('✅ ASR 识别完成 (%d ms): "%s"', int(elapsed * 1000), result.text)
-            # Fallback: type text directly via uinput if no IBus client is connected
             if not self._clients:
-                loop.run_in_executor(None, _type_text_uinput, result.text)
+                loop.run_in_executor(None, _type_text_x11, result.text)
 
     def _broadcast_state(self, state: str, message: str | None) -> None:
         msg = StateUpdate(state=state, message=message).to_json()

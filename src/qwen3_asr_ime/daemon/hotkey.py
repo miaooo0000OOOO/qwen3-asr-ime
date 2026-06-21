@@ -102,6 +102,7 @@ class EvdevHotkeyListener:
             return
         logger.info("Listening on %d input devices (passive, no grab)", len(devices))
         import time
+
         try:
             while not self._stop.is_set():
                 any_event = False
