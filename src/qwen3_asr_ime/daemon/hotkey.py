@@ -13,6 +13,26 @@ class HotkeyEvent:
     action: Literal["press", "release"]
 
 
+# Linux input event codes (evdev.KEY_*) — hardcoded for testability & speed
+_EC_CODES: dict[str, int] = {
+    "KEY_LEFTCTRL": 29,
+    "KEY_RIGHTCTRL": 97,
+    "KEY_LEFTMETA": 125,
+    "KEY_LEFTSHIFT": 42,
+    "KEY_RIGHTSHIFT": 54,
+    "KEY_LEFTALT": 56,
+    "KEY_RIGHTALT": 100,
+    "KEY_LEFT": 105,
+    "KEY_RIGHT": 106,
+    "KEY_UP": 103,
+    "KEY_DOWN": 108,
+    "KEY_ESC": 1,
+    "KEY_TAB": 15,
+    "KEY_SPACE": 57,
+    "KEY_ENTER": 28,
+    "KEY_BACKSPACE": 14,
+}
+
 class EvdevHotkeyListener:
     """Hotkey listener that supports chord combos and flex key families.
 
@@ -37,23 +57,24 @@ class EvdevHotkeyListener:
 
     @staticmethod
     def _parse_combo(combo: str) -> set[int]:
-        import evdev.ecodes as ec
+        # Linux input event codes (evdev.KEY_*)
+        # Avoid runtime ec.ecodes lookup for testability.
         name_map: dict[str, int] = {
-            "SUPER": ec.ecodes["KEY_LEFTMETA"],
-            "SHIFT": ec.ecodes["KEY_LEFTSHIFT"],
+            "SUPER": 125,   # KEY_LEFTMETA
+            "SHIFT": 42,    # KEY_LEFTSHIFT
             "CTRL": 0,
-            "ALT": ec.ecodes["KEY_LEFTALT"],
+            "ALT": 56,      # KEY_LEFTALT
         }
         codes: set[int] = set()
         for part in combo.upper().replace("<", "").replace(">", "").split("+"):
             part = part.strip()
             if part == "CTRL":
-                codes.add(ec.ecodes["KEY_LEFTCTRL"])
-                codes.add(ec.ecodes["KEY_RIGHTCTRL"])
+                codes.add(29)   # KEY_LEFTCTRL
+                codes.add(97)   # KEY_RIGHTCTRL
             elif part in name_map:
                 codes.add(name_map[part])
             else:
-                ec_code = ec.ecodes.get(f"KEY_{part}", 0)
+                ec_code = _EC_CODES.get(f"KEY_{part}")
                 if ec_code:
                     codes.add(ec_code)
         return codes
@@ -76,7 +97,7 @@ class EvdevHotkeyListener:
                 for dev in devices:
                     try:
                         for event in dev.read():
-                            if event.type == evdev.ecodes.EV_KEY:
+                            if event.type == 1:  # EV_KEY
                                 self._handle(event)
                     except BlockingIOError:
                         continue
@@ -84,7 +105,7 @@ class EvdevHotkeyListener:
             for dev in devices:
                 dev.ungrab()
 
-    def _handle(self, event: evdev.InputEvent) -> None:
+    def _handle(self, event) -> None:
         code = event.code
         from_code = code in self._target_codes
 
@@ -118,4 +139,3 @@ def create_hotkey_listener(device: str, key_combo: str, on_event):
     if device == "evdev":
         return EvdevHotkeyListener(key_combo, on_event)
     raise ValueError(f"Unsupported hotkey device: {device}")
-

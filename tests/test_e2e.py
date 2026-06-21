@@ -54,6 +54,7 @@ def _make_event(code: int, value: int) -> MagicMock:
     return e
 
 
+@pytest.mark.e2e
 @pytest.mark.asyncio
 async def test_full_daemon_flow(tmp_path):
     # ---- Set up evdev mock ----
