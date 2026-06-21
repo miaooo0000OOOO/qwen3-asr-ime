@@ -62,31 +62,35 @@ class VoiceInputDaemon:
             if event.action == "press" and self._state == "idle":
                 self._state = "recording"
                 self.recorder.start()
-                self._broadcast_state("recording", "开始录音")
-                logger.info("Recording started")
+                self._broadcast_state("recording", "🔴 录音中")
+                logger.info("⬇ Ctrl 按下 → 开始录音")
             elif event.action == "release" and self._state == "recording":
                 self._state = "recognizing"
-                self._broadcast_state("recognizing", "识别中...")
-                logger.info("Recording stopped, recognizing")
+                self._broadcast_state("recognizing", "🔄 识别中...")
                 audio_bytes = self.recorder.stop()
+                dur = len(audio_bytes) / 32000  # 16kHz 16bit 单声道
+                logger.info("⬆ Ctrl 松开 → 停止录音 (%.1f 秒, %d KB)", dur, len(audio_bytes) // 1024)
+                logger.info("➡ 调用 ASR 模型: %s", self.config.asr_endpoint)
                 self._loop.call_soon_threadsafe(
                     lambda: asyncio.create_task(self._recognize(audio_bytes))
                 )
         except Exception:
-            logger.exception("Hotkey handler error")
+            logger.exception("❌ 热键处理错误")
 
     async def _recognize(self, audio_bytes: bytes) -> None:
         loop = asyncio.get_running_loop()
+        t0 = loop.time()
         result = await loop.run_in_executor(None, self.asr.recognize, audio_bytes)
+        elapsed = loop.time() - t0
         if result.error:
             self._state = "idle"
-            self._broadcast_state("error", f"识别失败: {result.error}")
-            self._broadcast_recognized("", error=result.error)
+            self._broadcast_state("error", f"⚠️ ASR 错误")
+            logger.error("❌ ASR 识别失败 (%d ms): %s", int(elapsed * 1000), result.error)
         else:
             self._state = "idle"
-            self._broadcast_state("idle", None)
+            self._broadcast_state("idle", "🎤 就绪")
             self._broadcast_recognized(result.text)
-            logger.info("Recognized: %s", result.text)
+            logger.info("✅ ASR 识别完成 (%d ms): \"%s\"", int(elapsed * 1000), result.text)
 
     def _broadcast_state(self, state: str, message: str | None) -> None:
         msg = StateUpdate(state=state, message=message).to_json()
