@@ -30,7 +30,7 @@ hotkey:
   format: "int16"
   chunk_ms: 20
 asr:
-  endpoint: "http://127.0.0.1:8000/v1/audio/transcriptions"
+  endpoint: "http://127.0.0.1:8000"
   model: "Qwen/Qwen3-ASR"
   device: "auto"
   quantization: "auto"
