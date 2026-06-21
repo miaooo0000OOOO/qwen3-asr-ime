@@ -99,8 +99,6 @@ class EvdevHotkeyListener:
         if not devices:
             print("No input devices found.", file=sys.stderr)
             return
-        for dev in devices:
-            dev.grab()
         try:
             while not self._stop.is_set():
                 for dev in devices:
@@ -110,9 +108,6 @@ class EvdevHotkeyListener:
                                 self._handle(event)
                     except BlockingIOError:
                         continue
-        finally:
-            for dev in devices:
-                dev.ungrab()
 
     def _handle(self, event) -> None:
         code = event.code
