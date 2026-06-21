@@ -129,23 +129,18 @@ else
     echo "  gsettings set org.gnome.desktop.input-sources sources \"[('xkb', 'us'), ('ibus', 'libpinyin'), ('ibus', 'qwen3-asr-ime')]\""
 fi
 
-# Install systemd user service
-cat > "${SYSTEMD_USER_DIR}/qwen3-asr-ime.service" <<EOF
-[Unit]
-Description=Qwen3-ASR Voice Input Daemon
-After=graphical-session.target
+# Install systemd user services (template → instantiate)
+PYTHON="$(which python3)"
 
-[Service]
-Type=simple
-ExecStart=$(which python3) -m qwen3_asr_ime.daemon.service
-Restart=on-failure
-Environment="PYTHONUNBUFFERED=1"
-
-[Install]
-WantedBy=default.target
-EOF
+for svc in qwen3-asr-server qwen3-asr-ime; do
+    sed -e "s|{{PYTHON}}|${PYTHON}|g" \
+        -e "s|{{PROJECT_DIR}}|${PROJECT_DIR}|g" \
+        "${PROJECT_DIR}/systemd/${svc}.service" \
+        > "${SYSTEMD_USER_DIR}/${svc}.service"
+done
 
 systemctl --user daemon-reload
+systemctl --user enable --now qwen3-asr-server || true
 systemctl --user enable --now qwen3-asr-ime || true
 
 echo ""

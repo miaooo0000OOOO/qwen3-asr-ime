@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/home/aurora/miniconda3/bin/python3 /Data2/Code/python/qwen3-asr-ime/tools/asr_server.py
+ExecStart={{PYTHON}} {{PROJECT_DIR}}/tools/asr_server.py
 Restart=on-failure
 RestartSec=5
 Environment="PYTHONUNBUFFERED=1"
