@@ -1,0 +1,14 @@
+[Unit]
+Description=Qwen3-ASR Model Server (1.7B)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/aurora/miniconda3/bin/python3 /Data2/Code/python/qwen3-asr-ime/tools/asr_server.py
+Restart=on-failure
+RestartSec=5
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=default.target

@@ -1,10 +1,10 @@
 [Unit]
 Description=Qwen3-ASR Voice Input Daemon
-After=graphical-session.target
+After=graphical-session.target qwen3-asr-server.service
+Requires=qwen3-asr-server.service
 
 [Service]
-Type=simple
-ExecStart=$(which python3) -m qwen3_asr_ime.daemon.service
+ExecStart=/home/aurora/miniconda3/bin/python3 -m qwen3_asr_ime.daemon.service
 Restart=on-failure
 Environment="PYTHONUNBUFFERED=1"
 
