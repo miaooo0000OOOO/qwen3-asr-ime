@@ -28,7 +28,7 @@ class IMEConfig:
         if uid is None:
             uid = os.getuid()
         return cls(
-            hotkey_device="evdev",
+            hotkey_device="auto",
             hotkey_key="CTRL",
             audio_sample_rate=16000,
             audio_channels=1,
