@@ -15,6 +15,48 @@ from qwen3_asr_ime.daemon.recorder import AudioConfig, Recorder
 logger = get_logger(__name__)
 
 
+def _type_text_uinput(text: str) -> None:
+    """Type Unicode text via Ctrl+Shift+u hex input (no clipboard needed)."""
+    import time as _time
+    from evdev import UInput, ecodes as e
+
+    ui = UInput()
+    try:
+        for ch in text:
+            cp = ord(ch)
+            # Ctrl+Shift+u → hex digits → Space
+            # Press Ctrl+Shift+u
+            ui.write(e.EV_KEY, e.KEY_LEFTCTRL, 1)
+            ui.write(e.EV_KEY, e.KEY_LEFTSHIFT, 1)
+            ui.syn()
+            ui.write(e.EV_KEY, e.KEY_U, 1)
+            ui.syn()
+            ui.write(e.EV_KEY, e.KEY_U, 0)
+            ui.syn()
+            ui.write(e.EV_KEY, e.KEY_LEFTSHIFT, 0)
+            ui.write(e.EV_KEY, e.KEY_LEFTCTRL, 0)
+            ui.syn()
+            _time.sleep(0.01)
+            # Type hex digits
+            for hex_digit in f"{cp:x}":
+                key = getattr(e, f"KEY_{hex_digit.upper()}", None)
+                if key is None:
+                    continue
+                ui.write(e.EV_KEY, key, 1)
+                ui.syn()
+                ui.write(e.EV_KEY, key, 0)
+                ui.syn()
+                _time.sleep(0.005)
+            # Space to confirm
+            ui.write(e.EV_KEY, e.KEY_SPACE, 1)
+            ui.syn()
+            ui.write(e.EV_KEY, e.KEY_SPACE, 0)
+            ui.syn()
+            _time.sleep(0.01)
+    finally:
+        ui.close()
+
+
 class VoiceInputDaemon:
     def __init__(self, config: IMEConfig):
         self.config = config
@@ -97,6 +139,9 @@ class VoiceInputDaemon:
             self._broadcast_state("idle", "🎤 就绪")
             self._broadcast_recognized(result.text)
             logger.info('✅ ASR 识别完成 (%d ms): "%s"', int(elapsed * 1000), result.text)
+            # Fallback: type text directly via uinput if no IBus client is connected
+            if not self._clients:
+                loop.run_in_executor(None, _type_text_uinput, result.text)
 
     def _broadcast_state(self, state: str, message: str | None) -> None:
         msg = StateUpdate(state=state, message=message).to_json()

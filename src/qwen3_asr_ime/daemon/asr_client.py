@@ -48,9 +48,7 @@ class ASRClient:
             "Authorization": f"Bearer {self.api_key}",
         }
         try:
-            resp = requests.post(
-                url, headers=headers, json=payload, timeout=self.timeout
-            )
+            resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
             resp.raise_for_status()
             data = resp.json()
             content = data["choices"][0]["message"]["content"]

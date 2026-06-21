@@ -8,11 +8,13 @@ def test_recognize_success():
     responses.post(
         "http://127.0.0.1:8000/v1/chat/completions",
         json={
-            "choices": [{
-                "message": {
-                    "content": "<|language|>Chinese<|/language|><|text|>你好世界<|/text|>"
+            "choices": [
+                {
+                    "message": {
+                        "content": "<|language|>Chinese<|/language|><|text|>你好世界<|/text|>"
+                    }
                 }
-            }]
+            ]
         },
         status=200,
     )
@@ -39,9 +41,7 @@ def test_recognize_failure():
 def test_recognize_url_not_doubled():
     responses.post(
         "http://127.0.0.1:8000/v1/chat/completions",
-        json={
-            "choices": [{"message": {"content": "<|text|>ok<|/text|>"}}]
-        },
+        json={"choices": [{"message": {"content": "<|text|>ok<|/text|>"}}]},
         status=200,
     )
     client = ASRClient("http://127.0.0.1:8000")
