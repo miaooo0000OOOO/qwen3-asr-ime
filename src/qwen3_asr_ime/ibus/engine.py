@@ -5,21 +5,25 @@ from pathlib import Path
 
 import gi
 
-gi.require_version("IBus", "1.0")
-from gi.repository import GLib, IBus
+gi.require_version("IBus", "1.0")  # noqa: E402
+from gi.repository import GLib, IBus  # noqa: E402
 
-from qwen3_asr_ime.common.config import IMEConfig
-from qwen3_asr_ime.common.logger import get_logger
-from qwen3_asr_ime.common.protocol import RecognizedText, StateUpdate, parse_message
+from qwen3_asr_ime.common.config import IMEConfig  # noqa: E402
+from qwen3_asr_ime.common.logger import get_logger  # noqa: E402
+from qwen3_asr_ime.common.protocol import (  # noqa: E402
+    RecognizedText,
+    StateUpdate,
+    parse_message,
+)
 
 logger = get_logger(__name__)
 
 # Status → emoji label displayed in IBus panel
 STATUS_LABELS: dict[str, str] = {
-    "idle":        "🎤 就绪",
-    "recording":   "🔴 录音中",
+    "idle": "🎤 就绪",
+    "recording": "🔴 录音中",
     "recognizing": "🔄 识别中",
-    "error":       "⚠️ 错误",
+    "error": "⚠️ 错误",
 }
 
 

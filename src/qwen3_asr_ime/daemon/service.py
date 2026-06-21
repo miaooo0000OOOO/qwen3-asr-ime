@@ -73,7 +73,9 @@ class VoiceInputDaemon:
                 self._broadcast_state("recognizing", "🔄 识别中...")
                 audio_bytes = self.recorder.stop()
                 dur = len(audio_bytes) / 32000  # 16kHz 16bit 单声道
-                logger.info("⬆ Ctrl 松开 → 停止录音 (%.1f 秒, %d KB)", dur, len(audio_bytes) // 1024)
+                logger.info(
+                    "⬆ Ctrl 松开 → 停止录音 (%.1f 秒, %d KB)", dur, len(audio_bytes) // 1024
+                )
                 logger.info("➡ 调用 ASR 模型: %s", self.config.asr_endpoint)
                 self._loop.call_soon_threadsafe(
                     lambda: asyncio.create_task(self._recognize(audio_bytes))
@@ -88,13 +90,13 @@ class VoiceInputDaemon:
         elapsed = loop.time() - t0
         if result.error:
             self._state = "idle"
-            self._broadcast_state("error", f"⚠️ ASR 错误")
+            self._broadcast_state("error", "⚠️ ASR 错误")
             logger.error("❌ ASR 识别失败 (%d ms): %s", int(elapsed * 1000), result.error)
         else:
             self._state = "idle"
             self._broadcast_state("idle", "🎤 就绪")
             self._broadcast_recognized(result.text)
-            logger.info("✅ ASR 识别完成 (%d ms): \"%s\"", int(elapsed * 1000), result.text)
+            logger.info('✅ ASR 识别完成 (%d ms): "%s"', int(elapsed * 1000), result.text)
 
     def _broadcast_state(self, state: str, message: str | None) -> None:
         msg = StateUpdate(state=state, message=message).to_json()
@@ -110,9 +112,7 @@ class VoiceInputDaemon:
         for writer in list(self._clients):
             try:
                 writer.write(data)
-                loop.call_soon_threadsafe(
-                    lambda w=writer: asyncio.create_task(w.drain())
-                )
+                loop.call_soon_threadsafe(lambda w=writer: asyncio.create_task(w.drain()))
             except Exception as exc:
                 logger.warning("Failed to send to client: %s", exc)
 

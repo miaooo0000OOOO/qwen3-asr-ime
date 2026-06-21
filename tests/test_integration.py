@@ -14,10 +14,10 @@ sys.modules["evdev.ecodes"].ecodes = {}
 sys.modules["sounddevice"] = MagicMock()
 sys.modules["sounddevice"].InputStream = MagicMock()
 
-import responses
+import responses  # noqa: E402
 
-from qwen3_asr_ime.common.config import IMEConfig
-from qwen3_asr_ime.common.protocol import RecognizedText, parse_message
+from qwen3_asr_ime.common.config import IMEConfig  # noqa: E402
+from qwen3_asr_ime.common.protocol import RecognizedText, parse_message  # noqa: E402
 
 
 def _make_silent_wav(duration_sec: float = 0.2) -> bytes:
@@ -65,6 +65,7 @@ async def test_daemon_recognize_flow(tmp_path):
         mock_hotkey.return_value.stop = MagicMock()
 
         from qwen3_asr_ime.daemon.service import VoiceInputDaemon
+
         daemon = VoiceInputDaemon(config)
 
         daemon.recorder._frames = [_make_silent_wav(duration_sec=0.2)]
@@ -121,7 +122,6 @@ async def test_daemon_recognize_flow(tmp_path):
 
     # Verify we got the recognized text via parse_message (handles \\uXXXX encoding)
     parsed_messages = [parse_message(m) for m in received]
-    assert any(
-        isinstance(p, RecognizedText) and p.text == "测试文本"
-        for p in parsed_messages
-    ), f"Received messages: {received}"
+    assert any(isinstance(p, RecognizedText) and p.text == "测试文本" for p in parsed_messages), (
+        f"Received messages: {received}"
+    )

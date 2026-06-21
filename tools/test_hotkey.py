@@ -65,17 +65,17 @@ class EvdevHotkeyListener:
     @staticmethod
     def _parse_combo(combo: str) -> set[int]:
         name_map: dict[str, int] = {
-            "SUPER": 125,   # KEY_LEFTMETA
-            "SHIFT": 42,    # KEY_LEFTSHIFT
+            "SUPER": 125,  # KEY_LEFTMETA
+            "SHIFT": 42,  # KEY_LEFTSHIFT
             "CTRL": 0,
-            "ALT": 56,      # KEY_LEFTALT
+            "ALT": 56,  # KEY_LEFTALT
         }
         codes: set[int] = set()
         for part in combo.upper().replace("<", "").replace(">", "").split("+"):
             part = part.strip()
             if part == "CTRL":
-                codes.add(29)   # KEY_LEFTCTRL
-                codes.add(97)   # KEY_RIGHTCTRL
+                codes.add(29)  # KEY_LEFTCTRL
+                codes.add(97)  # KEY_RIGHTCTRL
             elif part in name_map:
                 codes.add(name_map[part])
             else:
@@ -99,15 +99,14 @@ class EvdevHotkeyListener:
         if not devices:
             print("No input devices found.", file=sys.stderr)
             return
-        try:
-            while not self._stop.is_set():
-                for dev in devices:
-                    try:
-                        for event in dev.read():
-                            if event.type == 1:  # EV_KEY
-                                self._handle(event)
-                    except BlockingIOError:
-                        continue
+        while not self._stop.is_set():
+            for dev in devices:
+                try:
+                    for event in dev.read():
+                        if event.type == 1:  # EV_KEY
+                            self._handle(event)
+                except BlockingIOError:
+                    continue
 
     def _handle(self, event) -> None:
         code = event.code
@@ -153,6 +152,7 @@ class PynputHotkeyListener:
 
     def start(self):
         from pynput import keyboard
+
         self._listener = keyboard.Listener(
             on_press=self._on_press,
             on_release=self._on_release,
@@ -208,6 +208,7 @@ def _create_listener(device: str, key_combo: str, on_event):
     if device == "auto":
         try:
             import evdev
+
             devs = evdev.list_devices()
             if devs:
                 print("evdev: input devices accessible, using evdev listener")
@@ -232,12 +233,16 @@ def _combo_label(combo: str) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Minimal hotkey test")
     parser.add_argument(
-        "combo", nargs="?", default="CTRL",
-        help='Hotkey combo, e.g. CTRL or <Super>+<Shift>+R (default: CTRL)',
+        "combo",
+        nargs="?",
+        default="CTRL",
+        help="Hotkey combo, e.g. CTRL or <Super>+<Shift>+R (default: CTRL)",
     )
     parser.add_argument(
-        "--device", choices=["evdev", "pynput", "auto"],
-        default="auto", help="Detection backend (default: auto)",
+        "--device",
+        choices=["evdev", "pynput", "auto"],
+        default="auto",
+        help="Detection backend (default: auto)",
     )
     args = parser.parse_args()
     label = _combo_label(args.combo)
@@ -255,13 +260,14 @@ def main():
     listener.start()
 
     try:
-        if hasattr(listener, '_thread'):
+        if hasattr(listener, "_thread"):
             # evdev — join the daemon thread until it stops (or Ctrl+C hits)
             while listener._thread.is_alive():
                 listener._thread.join(timeout=1)
         else:
             # pynput — just sleep
             import time
+
             while True:
                 time.sleep(3600)
     except KeyboardInterrupt:

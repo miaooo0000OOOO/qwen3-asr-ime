@@ -1,9 +1,9 @@
 import gi
 
-gi.require_version("IBus", "1.0")
-from gi.repository import IBus
+gi.require_version("IBus", "1.0")  # noqa: E402
+from gi.repository import IBus  # noqa: E402
 
-from qwen3_asr_ime.ibus.engine import Qwen3ASREngine
+from qwen3_asr_ime.ibus.engine import Qwen3ASREngine  # noqa: E402
 
 
 class EngineFactory(IBus.Factory):

@@ -46,7 +46,11 @@ class IMEConfig:
     @classmethod
     def load(cls, path: Path | None = None) -> "IMEConfig":
         if path is None:
-            path = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "qwen3-asr-ime" / "config.yaml"
+            path = (
+                Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+                / "qwen3-asr-ime"
+                / "config.yaml"
+            )
         defaults = cls.defaults()
         data = {
             "hotkey_device": defaults.hotkey_device,

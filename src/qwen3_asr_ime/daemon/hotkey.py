@@ -64,17 +64,17 @@ class EvdevHotkeyListener:
         # Linux input event codes (evdev.KEY_*)
         # Avoid runtime ec.ecodes lookup for testability.
         name_map: dict[str, int] = {
-            "SUPER": 125,   # KEY_LEFTMETA
-            "SHIFT": 42,    # KEY_LEFTSHIFT
+            "SUPER": 125,  # KEY_LEFTMETA
+            "SHIFT": 42,  # KEY_LEFTSHIFT
             "CTRL": 0,
-            "ALT": 56,      # KEY_LEFTALT
+            "ALT": 56,  # KEY_LEFTALT
         }
         codes: set[int] = set()
         for part in combo.upper().replace("<", "").replace(">", "").split("+"):
             part = part.strip()
             if part == "CTRL":
-                codes.add(29)   # KEY_LEFTCTRL
-                codes.add(97)   # KEY_RIGHTCTRL
+                codes.add(29)  # KEY_LEFTCTRL
+                codes.add(97)  # KEY_RIGHTCTRL
             elif part in name_map:
                 codes.add(name_map[part])
             else:
@@ -93,7 +93,9 @@ class EvdevHotkeyListener:
         try:
             devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
         except OSError:
-            logger.error("Cannot access input devices. Are you in the 'input' group? Try: sudo usermod -aG input $USER")
+            logger.error(
+                "Cannot access input devices. Are you in the 'input' group? Try: sudo usermod -aG input $USER"
+            )
             return
         if not devices:
             logger.error("No input devices found. Hotkey listener will not work.")
@@ -141,7 +143,6 @@ class EvdevHotkeyListener:
                     self.on_event(HotkeyEvent("release"))
 
 
-
 class PynputHotkeyListener:
     """Hotkey listener using ``pynput`` (no special permissions needed).
 
@@ -158,6 +159,7 @@ class PynputHotkeyListener:
 
     def start(self):
         from pynput import keyboard
+
         self._listener = keyboard.Listener(
             on_press=self._on_press,
             on_release=self._on_release,

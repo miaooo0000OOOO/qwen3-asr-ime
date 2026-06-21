@@ -13,12 +13,14 @@ class RecognizedText:
     error: str | None = None
 
     def to_json(self) -> str:
-        return json.dumps({
-            "type": self.type,
-            "text": self.text,
-            "confidence": self.confidence,
-            "error": self.error,
-        })
+        return json.dumps(
+            {
+                "type": self.type,
+                "text": self.text,
+                "confidence": self.confidence,
+                "error": self.error,
+            }
+        )
 
     @classmethod
     def from_dict(cls, data: dict) -> "RecognizedText":
@@ -40,11 +42,13 @@ class StateUpdate:
     message: str | None = None
 
     def to_json(self) -> str:
-        return json.dumps({
-            "type": self.type,
-            "state": self.state,
-            "message": self.message,
-        })
+        return json.dumps(
+            {
+                "type": self.type,
+                "state": self.state,
+                "message": self.message,
+            }
+        )
 
     @classmethod
     def from_dict(cls, data: dict) -> "StateUpdate":
@@ -65,6 +69,7 @@ class StateUpdate:
 @dataclass(frozen=True, slots=True)
 class HotkeyCommand:
     """Incoming hotkey command from GNOME Shell extension over IPC."""
+
     type: Literal["hotkey"] = "hotkey"
     action: Literal["press", "release"] = "press"
 

@@ -9,11 +9,11 @@ All mock setup happens inside the test function to avoid cross-test contaminatio
 of ``sys.modules`` (other test files may overwrite the evdev mock).
 Hotkey event handling and state machine run real code.
 """
+
 import asyncio
 import io
 import sys
 import wave
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -78,6 +78,7 @@ async def test_full_daemon_flow(tmp_path):
     # Patch hotkey's evdev reference in case hotkey was already imported
     # (it will be cached across test files in the full suite).
     import qwen3_asr_ime.daemon.hotkey as _hotkey_mod
+
     _hotkey_mod.evdev = evdev_mock
 
     # Shared state for the virtual device
@@ -175,12 +176,7 @@ async def test_full_daemon_flow(tmp_path):
         # Feed audio
         if stream_callback[0]:
             chunk = np.frombuffer(
-                test_wav[
-                    test_wav.find(b"data")
-                    + 8 : test_wav.find(b"data")
-                    + 8
-                    + 1600
-                ],
+                test_wav[test_wav.find(b"data") + 8 : test_wav.find(b"data") + 8 + 1600],
                 dtype=np.int16,
             ).reshape(-1, 1)
             stream_callback[0](chunk, len(chunk), None, None)
@@ -204,9 +200,7 @@ async def test_full_daemon_flow(tmp_path):
 
         # ---- Assert ----
         assert daemon._state == "idle", f"Expected idle, got {daemon._state}"
-        assert len(received) >= 2, (
-            f"Expected >=2 IPC messages, got {len(received)}: {received}"
-        )
+        assert len(received) >= 2, f"Expected >=2 IPC messages, got {len(received)}: {received}"
 
         found_text = None
         found_states = set()
@@ -217,9 +211,5 @@ async def test_full_daemon_flow(tmp_path):
             if isinstance(p, RecognizedText) and p.text:
                 found_text = p.text
 
-        assert found_text == "你好世界", (
-            f"Expected '你好世界', got '{found_text}'. All: {received}"
-        )
-        assert "recording" in found_states, (
-            f"State 'recording' missing. Seen: {found_states}"
-        )
+        assert found_text == "你好世界", f"Expected '你好世界', got '{found_text}'. All: {received}"
+        assert "recording" in found_states, f"State 'recording' missing. Seen: {found_states}"

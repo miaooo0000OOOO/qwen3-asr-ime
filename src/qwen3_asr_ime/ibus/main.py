@@ -2,11 +2,11 @@ import sys
 
 import gi
 
-gi.require_version("IBus", "1.0")
-from gi.repository import GLib, GObject, IBus
+gi.require_version("IBus", "1.0")  # noqa: E402
+from gi.repository import GLib, GObject, IBus  # noqa: E402
 
-from qwen3_asr_ime.common.logger import get_logger
-from qwen3_asr_ime.ibus.factory import EngineFactory
+from qwen3_asr_ime.common.logger import get_logger  # noqa: E402
+from qwen3_asr_ime.ibus.factory import EngineFactory  # noqa: E402
 
 logger = get_logger(__name__)
 
