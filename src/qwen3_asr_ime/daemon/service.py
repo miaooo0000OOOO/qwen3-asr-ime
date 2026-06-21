@@ -40,6 +40,7 @@ class VoiceInputDaemon:
         socket_path.parent.mkdir(parents=True, exist_ok=True)
         if socket_path.exists():
             socket_path.unlink()
+        self._loop = asyncio.get_running_loop()
 
         self._server = await asyncio.start_unix_server(
             self._on_client_connected,
@@ -57,25 +58,32 @@ class VoiceInputDaemon:
             await self._server.serve_forever()
 
     def _on_hotkey(self, event: HotkeyEvent) -> None:
-        if event.action == "press" and self._state == "idle":
-            self._state = "recording"
-            self.recorder.start()
-            self._broadcast_state("recording", "开始录音")
-            logger.info("Recording started")
-        elif event.action == "release" and self._state == "recording":
-            self._state = "recognizing"
-            self._broadcast_state("recognizing", "识别中...")
-            logger.info("Recording stopped, recognizing")
-            audio_bytes = self.recorder.stop()
-            asyncio.create_task(self._recognize(audio_bytes))
+        try:
+            if event.action == "press" and self._state == "idle":
+                self._state = "recording"
+                self.recorder.start()
+                self._broadcast_state("recording", "开始录音")
+                logger.info("Recording started")
+            elif event.action == "release" and self._state == "recording":
+                self._state = "recognizing"
+                self._broadcast_state("recognizing", "识别中...")
+                logger.info("Recording stopped, recognizing")
+                audio_bytes = self.recorder.stop()
+                self._loop.call_soon_threadsafe(
+                    lambda: asyncio.create_task(self._recognize(audio_bytes))
+                )
+        except Exception:
+            logger.exception("Hotkey handler error")
 
     async def _recognize(self, audio_bytes: bytes) -> None:
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, self.asr.recognize, audio_bytes)
         if result.error:
+            self._state = "idle"
             self._broadcast_state("error", f"识别失败: {result.error}")
             self._broadcast_recognized("", error=result.error)
         else:
+            self._state = "idle"
             self._broadcast_state("idle", None)
             self._broadcast_recognized(result.text)
             logger.info("Recognized: %s", result.text)
@@ -90,10 +98,13 @@ class VoiceInputDaemon:
 
     def _broadcast(self, msg: str) -> None:
         data = (msg + "\n").encode("utf-8")
+        loop = self._loop
         for writer in list(self._clients):
             try:
                 writer.write(data)
-                asyncio.create_task(writer.drain())
+                loop.call_soon_threadsafe(
+                    lambda w=writer: asyncio.create_task(w.drain())
+                )
             except Exception as exc:
                 logger.warning("Failed to send to client: %s", exc)
 
