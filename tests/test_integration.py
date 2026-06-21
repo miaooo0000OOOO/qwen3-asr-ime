@@ -55,8 +55,8 @@ async def test_daemon_recognize_flow(tmp_path):
     )
 
     responses.post(
-        "http://localhost:8000/v1/audio/transcriptions",
-        json={"text": "测试文本"},
+        "http://localhost:8000/v1/chat/completions",
+        json={"choices": [{"message": {"content": "<|language|>Chinese<|/language|><|text|>测试文本<|/text|>"}}]},
         status=200,
     )
 
