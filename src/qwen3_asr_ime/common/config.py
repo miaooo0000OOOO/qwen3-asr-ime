@@ -32,6 +32,7 @@ class IMEConfig:
             hotkey_key="CTRL",
             audio_sample_rate=16000,
             audio_channels=1,
+            audio_format="int16",
             audio_chunk_ms=20,
             asr_endpoint="http://127.0.0.1:8000/v1/audio/transcriptions",
             asr_model="Qwen/Qwen3-ASR",

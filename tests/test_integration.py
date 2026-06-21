@@ -6,14 +6,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Mock evdev and pyaudio at module level
+# Mock evdev and sounddevice at module level before any qwen3_asr_ime imports
 sys.modules["evdev"] = MagicMock()
 sys.modules["evdev.ecodes"] = MagicMock()
 sys.modules["evdev.ecodes"].EV_KEY = 1
 sys.modules["evdev.ecodes"].ecodes = {}
-sys.modules["pyaudio"] = MagicMock()
-sys.modules["pyaudio"].paInt16 = 8
-sys.modules["pyaudio"].paContinue = 1
+sys.modules["sounddevice"] = MagicMock()
+sys.modules["sounddevice"].InputStream = MagicMock()
 
 import responses
 
