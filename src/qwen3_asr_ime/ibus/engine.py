@@ -14,12 +14,12 @@ from qwen3_asr_ime.common.protocol import RecognizedText, StateUpdate, parse_mes
 
 logger = get_logger(__name__)
 
-# Status → (icon-name, label-text)
-STATUS_ICONS: dict[str, tuple[str, str]] = {
-    "idle":        ("microphone-sensitivity-muted-symbolic", " 就绪"),
-    "recording":   ("media-record-symbolic",                " 录音中"),
-    "recognizing": ("emblem-synchronizing-symbolic",        " 识别中"),
-    "error":       ("dialog-error-symbolic",                " 错误"),
+# Status → emoji label displayed in IBus panel
+STATUS_LABELS: dict[str, str] = {
+    "idle":        "🎤 就绪",
+    "recording":   "🔴 录音中",
+    "recognizing": "🔄 识别中",
+    "error":       "⚠️ 错误",
 }
 
 
@@ -31,25 +31,20 @@ class Qwen3ASREngine(IBus.Engine):
         self.config = IMEConfig.load()
         self._reader = None
         self._writer = None
-        self._prop_status = self._make_prop("idle")
         self._prop_list = IBus.PropList()
-        self._prop_list.append(self._prop_status)
+        self._prop_list.append(self._make_prop("idle"))
         GLib.timeout_add(100, self._connect_to_daemon)
 
     @staticmethod
     def _make_prop(state: str) -> IBus.Property:
-        icon, label = STATUS_ICONS.get(state, ("", state))
         return IBus.Property(
             key="status",
             type=IBus.PropType.NORMAL,
-            icon=icon,
-            label=IBus.Text.new_from_string("Qwen3-ASR" + label),
-            symbol=IBus.Text.new_from_string("🎤"),
+            label=IBus.Text.new_from_string(STATUS_LABELS.get(state, state)),
         )
 
-    def _set_state(self, state: str, message: str | None = None) -> None:
-        self._prop_status = self._make_prop(state)
-        self.update_property("status", self._prop_status)
+    def _set_state(self, state: str) -> None:
+        self.update_property("status", self._make_prop(state))
 
     def _connect_to_daemon(self):
         socket_path = Path(self.config.ipc_socket_path)
@@ -85,12 +80,12 @@ class Qwen3ASREngine(IBus.Engine):
     def _handle_message(self, msg):
         if isinstance(msg, RecognizedText):
             if msg.error:
-                self._set_state("error", msg.error[:40])
+                self._set_state("error")
             elif msg.text:
                 self.commit_text(IBus.Text.new_from_string(msg.text))
                 self._set_state("idle")
         elif isinstance(msg, StateUpdate):
-            self._set_state(msg.state, msg.message)
+            self._set_state(msg.state)
         return False
 
     def do_focus_in(self):
