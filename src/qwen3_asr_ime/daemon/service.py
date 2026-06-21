@@ -16,48 +16,15 @@ logger = get_logger(__name__)
 
 
 def _type_text_uinput(text: str) -> None:
-    """Type Unicode text via Ctrl+Shift+u hex input."""
-    import time as _time
-    from evdev import UInput, ecodes as e
-
-    ui = UInput()
+    """Type text using xdotool (reliable, no clipboard)."""
+    import subprocess
     try:
-        for ch in text:
-            cp = ord(ch)
-            hex_str = f"{cp:04x}"
-            # Ctrl+Shift+u: press all three, release u, then modifiers
-            ui.write(e.EV_KEY, e.KEY_LEFTCTRL, 1)
-            ui.write(e.EV_KEY, e.KEY_LEFTSHIFT, 1)
-            ui.write(e.EV_KEY, e.KEY_U, 1)
-            ui.syn()
-            _time.sleep(0.01)
-            ui.write(e.EV_KEY, e.KEY_U, 0)      # release u first
-            ui.syn()
-            ui.write(e.EV_KEY, e.KEY_LEFTSHIFT, 0)
-            ui.write(e.EV_KEY, e.KEY_LEFTCTRL, 0)
-            ui.syn()
-            _time.sleep(0.02)  # wait for unicode mode
-            # Type hex digits
-            for h in hex_str:
-                key = {"0": e.KEY_0, "1": e.KEY_1, "2": e.KEY_2, "3": e.KEY_3,
-                       "4": e.KEY_4, "5": e.KEY_5, "6": e.KEY_6, "7": e.KEY_7,
-                       "8": e.KEY_8, "9": e.KEY_9, "a": e.KEY_A, "b": e.KEY_B,
-                       "c": e.KEY_C, "d": e.KEY_D, "e": e.KEY_E, "f": e.KEY_F}.get(h)
-                ui.write(e.EV_KEY, key, 1)
-                ui.syn()
-                _time.sleep(0.005)
-                ui.write(e.EV_KEY, key, 0)
-                ui.syn()
-                _time.sleep(0.005)
-            # Space to confirm → character appears
-            ui.write(e.EV_KEY, e.KEY_SPACE, 1)
-            ui.syn()
-            _time.sleep(0.005)
-            ui.write(e.EV_KEY, e.KEY_SPACE, 0)
-            ui.syn()
-            _time.sleep(0.1)  # wait for character to commit before next Ctrl+Shift+u
-        ui.close()
-
+        subprocess.run(
+            ["xdotool", "type", "--delay", "10", text],
+            check=True, timeout=10, capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        logger.error("xdotool failed: %s", exc)
 
 class VoiceInputDaemon:
     def __init__(self, config: IMEConfig):
