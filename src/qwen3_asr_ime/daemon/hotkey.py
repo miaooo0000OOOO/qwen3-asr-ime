@@ -98,8 +98,7 @@ class EvdevHotkeyListener:
         if not devices:
             logger.error("No input devices found. Hotkey listener will not work.")
             return
-        for dev in devices:
-            dev.grab()
+        logger.info("Listening on %d input devices (passive, no grab)", len(devices))
         try:
             while not self._stop.is_set():
                 for dev in devices:
@@ -109,9 +108,8 @@ class EvdevHotkeyListener:
                                 self._handle(event)
                     except BlockingIOError:
                         continue
-        finally:
-            for dev in devices:
-                dev.ungrab()
+        except Exception:
+            logger.exception("Hotkey listener error")
 
     def _handle(self, event) -> None:
         code = event.code
