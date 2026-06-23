@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -20,6 +21,7 @@ class IMEConfig:
     asr_device: str
     asr_quantization: str
     asr_api_key: str
+    asr_timeout: float
     ipc_socket_path: str
     log_level: str
 
@@ -35,10 +37,11 @@ class IMEConfig:
             audio_format="int16",
             audio_chunk_ms=20,
             asr_endpoint="http://127.0.0.1:8000",
-            asr_model="Qwen/Qwen3-ASR",
+            asr_model="Qwen/Qwen3-ASR-0.6B",
             asr_device="auto",
             asr_quantization="auto",
             asr_api_key="dummy",
+            asr_timeout=30.0,
             ipc_socket_path=f"{os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{uid}')}/qwen3-asr-ime.sock",
             log_level="INFO",
         )
@@ -52,7 +55,7 @@ class IMEConfig:
                 / "config.yaml"
             )
         defaults = cls.defaults()
-        data = {
+        data: dict[str, Any] = {
             "hotkey_device": defaults.hotkey_device,
             "hotkey_key": defaults.hotkey_key,
             "audio_sample_rate": defaults.audio_sample_rate,
@@ -64,12 +67,43 @@ class IMEConfig:
             "asr_device": defaults.asr_device,
             "asr_quantization": defaults.asr_quantization,
             "asr_api_key": defaults.asr_api_key,
+            "asr_timeout": defaults.asr_timeout,
             "ipc_socket_path": defaults.ipc_socket_path,
             "log_level": defaults.log_level,
         }
+
+        # Mapping from flat config key -> list of nested keys in the YAML file.
+        _KEY_PATHS: dict[str, list[str]] = {
+            "hotkey_device": ["hotkey", "device"],
+            "hotkey_key": ["hotkey", "key"],
+            "audio_sample_rate": ["audio", "sample_rate"],
+            "audio_channels": ["audio", "channels"],
+            "audio_format": ["audio", "format"],
+            "audio_chunk_ms": ["audio", "chunk_ms"],
+            "asr_endpoint": ["asr", "endpoint"],
+            "asr_model": ["asr", "model"],
+            "asr_device": ["asr", "device"],
+            "asr_quantization": ["asr", "quantization"],
+            "asr_api_key": ["asr", "api_key"],
+            "asr_timeout": ["asr", "timeout"],
+            "ipc_socket_path": ["ipc", "socket_path"],
+            "log_level": ["logging", "level"],
+        }
+
+        def _get_nested(root: dict[str, Any], path: list[str]) -> Any:
+            node: Any = root
+            for key in path:
+                if not isinstance(node, dict):
+                    return None
+                node = node.get(key)
+            return node
+
         if path.exists():
             with open(path, "r", encoding="utf-8") as f:
                 loaded = yaml.safe_load(f) or {}
-            known_keys = set(data.keys())
-            data.update({k: v for k, v in loaded.items() if k in known_keys})
+            for flat_key, nested_path in _KEY_PATHS.items():
+                value = _get_nested(loaded, nested_path)
+                if value is not None:
+                    data[flat_key] = value
+
         return cls(**data)
