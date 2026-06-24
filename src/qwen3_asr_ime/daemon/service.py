@@ -69,6 +69,7 @@ def _type_incremental_x11(to_delete: int, text: str) -> None:
         )
 
         def _send_keycode(keycode: int, state: int = 0) -> None:
+            """Send a synthetic X11 KeyPress/KeyRelease event pair."""
             for is_press in (True, False):
                 event_cls = (
                     Xlib.display.event.KeyPress
@@ -138,6 +139,11 @@ class VoiceInputDaemon:
     """
 
     def __init__(self, config_watcher: ConfigWatcher | IMEConfig):
+        """Create daemon with ConfigWatcher for live config or IMEConfig for tests.
+
+        Args:
+            config_watcher: ConfigWatcher instance (production) or IMEConfig (tests).
+        """
         if isinstance(config_watcher, IMEConfig):
             # Backward compatibility for tests — wrap IMEConfig in a dummy.
             self._config_watcher = config_watcher  # type: ignore[assignment]
@@ -613,12 +619,13 @@ class VoiceInputDaemon:
     def _on_client_connected(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
-        """Handle a new IPC client connection."""
+        """Accept new IPC client and spawn a read loop for incoming messages."""
         with self._lock:
             self._clients.add(writer)
         logger.info("IPC client connected")
 
-        async def read_loop():
+        async def read_loop() -> None:
+            """Read JSON-line messages from the IPC client until disconnect."""
             try:
                 while True:
                     line = await reader.readline()

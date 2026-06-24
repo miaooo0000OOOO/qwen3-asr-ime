@@ -233,7 +233,7 @@ class ASRHttpClient:
     async def transcribe(
         self, wav_bytes: bytes, language: str | None = None
     ) -> ASRResult:
-        """Send a complete WAV recording for recognition.
+        """Send a complete WAV recording for non-streaming recognition.
 
         Args:
             wav_bytes: WAV-encoded audio bytes (full recording).

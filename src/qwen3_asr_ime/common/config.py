@@ -40,6 +40,7 @@ class IMEConfig:
 
     @property
     def model_path(self) -> str:
+        """Resolve model size string to filesystem path. Falls back to 1.7B path."""
         return self._MODEL_PATH_MAP.get(self.asr_model, self._MODEL_PATH_MAP["1.7B"])
 
     @classmethod
@@ -62,6 +63,7 @@ class IMEConfig:
 
     @classmethod
     def defaults(cls, uid: int | None = None) -> "IMEConfig":
+        """Return default IMEConfig with offline/1.7B/transformers defaults."""
         if uid is None:
             uid = os.getuid()
         return cls(
@@ -87,6 +89,7 @@ class IMEConfig:
 
     @classmethod
     def load(cls, path: Path | None = None) -> "IMEConfig":
+        """Load config from YAML file, filling missing keys with defaults. Validates after load."""
         if path is None:
             path = (
                 Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
@@ -137,6 +140,7 @@ class IMEConfig:
         }
 
         def _get_nested(root: dict[str, Any], path: list[str]) -> Any:
+            """Walk nested dict along path, returning the value or None."""
             node: Any = root
             for key in path:
                 if not isinstance(node, dict):
@@ -173,6 +177,10 @@ class ConfigWatcher:
     _POLL_INTERVAL: float = 5.0  # seconds (hardcoded, not in config file)
 
     def __init__(self, path: Path | None = None) -> None:
+        """Load config from path, creating default file and first-loading on init.
+
+        Exits via sys.exit(1) if default creation or first load fails.
+        """
         import logging
         import sys
 
@@ -203,6 +211,7 @@ class ConfigWatcher:
 
     @property
     def config(self) -> IMEConfig:
+        """Return the currently-effective IMEConfig."""
         return self._config
 
     def _create_default(self) -> None:

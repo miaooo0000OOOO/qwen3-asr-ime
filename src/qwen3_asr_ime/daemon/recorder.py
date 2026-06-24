@@ -60,6 +60,7 @@ class Recorder:
     """
 
     def __init__(self, config: AudioConfig | None = None):
+        """Create a Recorder with optional AudioConfig (uses defaults if omitted)."""
         self.config = config or AudioConfig()
         self._stream: sd.InputStream | None = None
         self._frames: list[np.ndarray] = []

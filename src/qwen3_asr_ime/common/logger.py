@@ -1,5 +1,7 @@
 """Standardized logging setup for qwen3-asr-ime."""
 
+from __future__ import annotations
+
 import logging
 import sys
 

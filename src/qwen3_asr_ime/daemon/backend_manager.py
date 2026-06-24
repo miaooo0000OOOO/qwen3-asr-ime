@@ -50,6 +50,7 @@ class BackendManager:
     }
 
     def __init__(self) -> None:
+        """Initialize with no process, inactive idle timer, and defaults."""
         self._process: asyncio.subprocess.Process | None = None
         self._last_activity: float = 0.0
         self._stderr_task: asyncio.Task[None] | None = None
@@ -60,6 +61,7 @@ class BackendManager:
 
     @property
     def is_running(self) -> bool:
+        """Return True if the backend process exists and has not exited."""
         return self._process is not None and self._process.returncode is None
 
     async def spawn(self, config: IMEConfig) -> None:
