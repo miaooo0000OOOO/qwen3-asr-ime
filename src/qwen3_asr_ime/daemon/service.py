@@ -1,29 +1,24 @@
 """Main voice input daemon.
 
 This daemon ties together the global hotkey listener, microphone recorder,
-streaming ASR client, IPC server, and X11 text injection.
+ASR client (streaming or non-streaming), IPC server, and X11 text injection.
+It manages backend lifecycle (spawn/sleep/restart) and watches the config
+file for live changes.
 
-High-level flow (streaming branch):
+High-level flow:
 
-1. The user holds the configured hotkey (default: Ctrl).
-2. ``VoiceInputDaemon._on_hotkey(press)`` starts the ``Recorder`` and opens a
-   WebSocket connection to the Qwen3-ASR server via ``ASRStreamClient``.
-3. Audio chunks captured by ``sounddevice`` are pushed into a deque and sent
-   over the WebSocket by ``_send_chunks_loop``.
-4. The server returns ``partial`` results during recording; these are broadcast
-   to any connected IPC clients over the Unix socket.
-5. When the user releases the hotkey, ``_finish_stream()`` flushes remaining
-   chunks, sends a ``finish`` message, waits for the ``final`` result, and
-   injects the recognized text into the active X11 window.
+- **Non-streaming (offline, default):** User holds hotkey → record. Release →
+  POST complete WAV to ``/v1/asr/transcribe`` → type final result once.
+  No real-time partial output.
 
-IPC:
+- **Streaming:** User holds → WebSocket to server, send chunks, type
+  incremental partial results. Release → finish → final result.
 
-- A Unix domain socket (configured by ``ipc_socket_path``) accepts JSON-line
-  messages from external clients (e.g. a future GUI or shell extension).
-  Currently only ``HotkeyCommand`` is handled, allowing remote triggering of
-  recording.
-- State updates and recognized text are broadcast back to connected clients as
-  JSON-line messages.
+Daemon-level features:
+- Auto-sleep: stop backend after idle timeout to save CPU/GPU memory.
+- Config watching: poll config mtime every 5s; reload on change; restart
+  backend if backend-relevant fields changed.
+- Fail-loudly: any unexpected error calls ``sys.exit(1)``.
 """
 
 from __future__ import annotations
@@ -31,14 +26,25 @@ from __future__ import annotations
 import asyncio
 import collections
 import os
-import threading
 import signal
+import sys
+import threading
 from pathlib import Path
 
-from qwen3_asr_ime.common.config import IMEConfig
+from qwen3_asr_ime.common.config import ConfigWatcher, IMEConfig
 from qwen3_asr_ime.common.logger import get_logger
-from qwen3_asr_ime.common.protocol import HotkeyCommand, RecognizedText, StateUpdate, parse_message
-from qwen3_asr_ime.daemon.asr_client import ASRResult, ASRStreamClient
+from qwen3_asr_ime.common.protocol import (
+    HotkeyCommand,
+    RecognizedText,
+    StateUpdate,
+    parse_message,
+)
+from qwen3_asr_ime.daemon.asr_client import (
+    ASRHttpClient,
+    ASRResult,
+    ASRStreamClient,
+)
+from qwen3_asr_ime.daemon.backend_manager import BackendManager
 from qwen3_asr_ime.daemon.hotkey import HotkeyEvent, create_hotkey_listener
 from qwen3_asr_ime.daemon.recorder import AudioConfig, Recorder
 
@@ -49,8 +55,7 @@ def _type_text_x11(text: str) -> None:
     """Type Unicode text into the currently focused X11 window.
 
     Uses ``pynput.keyboard.Controller.type``, which sends fake key events
-    through the X11 XTEST extension. The X Server routes these events to the
-    window that currently has keyboard focus, so no window ID is needed.
+    through the X11 XTEST extension.
     """
     from pynput.keyboard import Controller
 
@@ -58,14 +63,7 @@ def _type_text_x11(text: str) -> None:
 
 
 def _type_incremental_x11(to_delete: int, text: str) -> None:
-    """Delete ``to_delete`` characters then type ``text`` into the active window.
-
-    This implementation avoids ``pynput.keyboard.Controller.type``'s keycode
-    borrowing limits, which cause ``InvalidCharacterException`` for long
-    Chinese strings. It uses a single scratch keycode and synthetic X events
-    with ``state=0`` so that physical modifiers (e.g. the held Ctrl hotkey)
-    do not corrupt the injected characters.
-    """
+    """Delete ``to_delete`` characters then type ``text`` into the active window."""
     import time
 
     import Xlib.display
@@ -77,12 +75,16 @@ def _type_incremental_x11(to_delete: int, text: str) -> None:
     try:
         focus = display.get_input_focus().focus
         root = display.screen().root
-        send_event = getattr(focus, "send_event", lambda event: display.send_event(focus, event))
+        send_event = getattr(
+            focus, "send_event", lambda event: display.send_event(focus, event)
+        )
 
         def _send_keycode(keycode: int, state: int = 0) -> None:
             for is_press in (True, False):
                 event_cls = (
-                    Xlib.display.event.KeyPress if is_press else Xlib.display.event.KeyRelease
+                    Xlib.display.event.KeyPress
+                    if is_press
+                    else Xlib.display.event.KeyRelease
                 )
                 send_event(
                     event_cls(
@@ -101,7 +103,6 @@ def _type_incremental_x11(to_delete: int, text: str) -> None:
                 )
             display.sync()
 
-        # Backspace: use an explicit synthetic event to avoid pynput borrowing.
         backspace_kc = display.keysym_to_keycode(Xlib.XK.XK_BackSpace)
         for _ in range(to_delete):
             _send_keycode(backspace_kc)
@@ -110,7 +111,6 @@ def _type_incremental_x11(to_delete: int, text: str) -> None:
         if not text:
             return
 
-        # Find an unused scratch keycode to temporarily map Unicode characters.
         min_kc = display.display.info.min_keycode
         max_kc = display.display.info.max_keycode
         mapping = display.get_keyboard_mapping(min_kc, max_kc - min_kc + 1)
@@ -131,7 +131,6 @@ def _type_incremental_x11(to_delete: int, text: str) -> None:
             _send_keycode(scratch_kc)
             time.sleep(0.01)
 
-        # Restore the scratch keycode.
         display.change_keyboard_mapping(scratch_kc, [(Xlib.XK.NoSymbol,)])
         display.sync()
     finally:
@@ -139,35 +138,36 @@ def _type_incremental_x11(to_delete: int, text: str) -> None:
 
 
 class VoiceInputDaemon:
-    """Daemon that orchestrates hotkey, recording, streaming ASR, IPC, and typing.
+    """Daemon that orchestrates hotkey, recording, ASR, IPC, typing, backend lifecycle.
 
     Attributes:
-        config: Runtime configuration loaded from YAML.
+        _config_watcher: Watches config file for changes.
+        _config: Current effective config (may be updated at runtime).
+        _backend_mgr: Manages the ASR backend child process.
         recorder: ``Recorder`` instance for microphone capture.
         hotkey: Global hotkey listener (pynput-based).
-        _clients: Connected IPC clients over the Unix socket.
-        _state: Current high-level state: ``"idle"``, ``"recording"``,
-            ``"recognizing"``, or ``"error"``.
-        _stream_client: Active WebSocket client to the ASR server.
-        _streaming_task: Async task that reads partial/final results.
-        _sender_task: Async task that drains the chunk deque to the server.
-        _pending_chunks: Deque of int16 PCM chunks waiting to be sent.
-        _stream_final_event: Set when the streaming reader reaches the final
-            result or an error.
     """
 
-    def __init__(self, config: IMEConfig):
-        self.config = config
+    def __init__(self, config_watcher: ConfigWatcher | IMEConfig):
+        if isinstance(config_watcher, IMEConfig):
+            # Backward compatibility for tests — wrap IMEConfig in a dummy.
+            self._config_watcher = config_watcher  # type: ignore[assignment]
+            self._config = config_watcher
+        else:
+            self._config_watcher = config_watcher
+            self._config = config_watcher.config
+        self._backend_mgr = BackendManager()
+
         self.recorder = Recorder(
             AudioConfig(
-                sample_rate=config.audio_sample_rate,
-                channels=config.audio_channels,
-                chunk_ms=config.audio_chunk_ms,
+                sample_rate=self._config.audio_sample_rate,
+                channels=self._config.audio_channels,
+                chunk_ms=self._config.audio_chunk_ms,
             )
         )
         self.hotkey = create_hotkey_listener(
-            config.hotkey_device,
-            config.hotkey_key,
+            self._config.hotkey_device,
+            self._config.hotkey_key,
             self._on_hotkey,
         )
         self._clients: set[asyncio.StreamWriter] = set()
@@ -181,27 +181,59 @@ class VoiceInputDaemon:
         self._sender_task: asyncio.Task[None] | None = None
         self._serve_task: asyncio.Task[None] | None = None
         self._pending_chunks: collections.deque[bytes] = collections.deque()
-        self._max_pending_chunks = 200  # ~4 seconds at 20ms/chunk
+        self._max_pending_chunks = 200
         self._streaming_error: str | None = None
         self._current_text: str = ""
         self._typed_text: str = ""
         self._stream_final_result: ASRResult | None = None
         self._stream_final_event: asyncio.Event | None = None
 
+        # Offline ASR state
+        self._offline_recording: bytes = b""
+
+        # Background tasks
+        self._config_watch_task: asyncio.Task[None] | None = None
+        self._idle_check_task: asyncio.Task[None] | None = None
+
+        # Error counter for consecutive failures
+        self._consecutive_errors: int = 0
+        self._max_consecutive_errors: int = 5
+
     async def start(self) -> None:
-        """Create the IPC Unix socket and start the hotkey listener."""
-        socket_path = Path(self.config.ipc_socket_path)
+        """Create IPC socket, start backend, launch hotkey, begin config/idle watchers."""
+        socket_path = Path(self._config.ipc_socket_path)
         socket_path.parent.mkdir(parents=True, exist_ok=True)
         if socket_path.exists():
             socket_path.unlink()
         self._loop = asyncio.get_running_loop()
 
+        # Spawn backend and wait for health
+        await self._backend_mgr.spawn(self._config)
+        await self._backend_mgr.wait_ready()
+
+        # Start IPC server
         self._server = await asyncio.start_unix_server(
             self._on_client_connected,
             path=str(socket_path),
         )
         os.chmod(socket_path, 0o600)
+
+        # Start hotkey listener
         self.hotkey.start()
+
+        # Launch background watchers (skip in test mode when config_watcher is IMEConfig)
+        if isinstance(self._config_watcher, ConfigWatcher):
+            self._config_watch_task = asyncio.create_task(
+                self._config_watcher.watch_loop(self._on_config_change)
+            )
+            self._idle_check_task = asyncio.create_task(self._idle_check_loop())
+
+        logger.info(
+            "Daemon started (mode=%s, backend=%s, model=%s)",
+            self._config.asr_mode,
+            self._config.asr_backend,
+            self._config.asr_model,
+        )
 
     def _on_hotkey_message(self, msg: HotkeyCommand) -> None:
         """Handle hotkey commands received over IPC."""
@@ -222,72 +254,93 @@ class VoiceInputDaemon:
 
     def _on_hotkey(self, event: HotkeyEvent) -> None:
         """Handle a hotkey event (may arrive from a non-asyncio thread)."""
-        self._loop.call_soon_threadsafe(lambda ev=event: self._handle_hotkey(ev))
+        asyncio.run_coroutine_threadsafe(self._handle_hotkey(event), self._loop)
 
-    def _handle_hotkey(self, event: HotkeyEvent) -> None:
-        """State machine entry point driven by press/release hotkey events.
+    async def _handle_hotkey(self, event: HotkeyEvent) -> None:
+        """State machine driven by press/release hotkey events.
 
-        Always runs on the asyncio event loop.
+        Routes between offline (non-streaming) and streaming modes based on config.
         """
         try:
             if event.action == "press" and self._state == "idle":
+                # Wake up backend if it was sleeping
+                if not self._backend_mgr.is_running:
+                    await self._backend_mgr.spawn(self._config)
+                    await self._backend_mgr.wait_ready()
+                else:
+                    self._backend_mgr.touch_activity()
+
                 self._state = "recording"
                 self._current_text = ""
                 self._typed_text = ""
                 self._streaming_error = None
                 self._stream_final_result = None
-                self._stream_final_event = asyncio.Event()
+                self._offline_recording = b""
                 self._pending_chunks.clear()
-                self.recorder.start(chunk_callback=self._on_audio_chunk)
-                self._stream_client = ASRStreamClient(
-                    self.config.asr_endpoint,
-                    api_key=self.config.asr_api_key,
-                    timeout=self.config.asr_timeout,
-                )
-                self._streaming_task = asyncio.create_task(self._run_stream())
-                self._broadcast_state("recording", "🔴 录音中")
-                logger.info("⬇ Ctrl 按下 → 开始录音并建立流式 ASR 连接")
+
+                if self._config.asr_mode == "streaming":
+                    # Existing streaming flow
+                    self._stream_final_event = asyncio.Event()
+                    self.recorder.start(chunk_callback=self._on_audio_chunk)
+                    self._stream_client = ASRStreamClient(
+                        self._config.asr_endpoint,
+                        api_key=self._config.asr_api_key,
+                        timeout=self._config.asr_timeout,
+                    )
+                    self._streaming_task = asyncio.create_task(self._run_stream())
+                    self._broadcast_state("recording", "🔴 录音中 (流式)")
+                    logger.info("⬇ Ctrl 按下 → 开始录音并建立流式 ASR 连接")
+                else:
+                    # Offline mode: just record, no WebSocket
+                    self.recorder.start()  # no chunk_callback needed
+                    self._broadcast_state("recording", "🔴 录音中 (离线)")
+                    logger.info("⬇ Ctrl 按下 → 开始录音 (离线模式)")
+
             elif event.action == "release" and self._state == "recording":
                 self._state = "recognizing"
                 self._broadcast_state("recognizing", "🔄 识别中...")
                 audio_bytes = self.recorder.stop()
                 dur = len(audio_bytes) / 32000
                 logger.info(
-                    "⬆ Ctrl 松开 → 停止录音 (%.1f 秒, %d KB)", dur, len(audio_bytes) // 1024
+                    "⬆ Ctrl 松开 → 停止录音 (%.1f 秒, %d KB)",
+                    dur,
+                    len(audio_bytes) // 1024,
                 )
-                asyncio.create_task(self._finish_stream())
+                if self._config.asr_mode == "offline":
+                    self._offline_recording = audio_bytes
+                    asyncio.create_task(self._run_offline_recognition())
+                else:
+                    asyncio.create_task(self._finish_stream())
+
             elif event.action == "interrupt" and self._state == "recording":
                 logger.info("⛔ 检测到组合键，中断语音输入")
                 self._state = "idle"
                 self._broadcast_state("idle", "🎤 就绪")
                 self.recorder.stop()
                 self._pending_chunks.clear()
-                asyncio.create_task(self._cleanup_streaming())
+                if self._config.asr_mode == "streaming":
+                    asyncio.create_task(self._cleanup_streaming())
         except Exception:
             logger.exception("❌ 热键处理错误")
+            self._consecutive_errors += 1
+            if self._consecutive_errors >= self._max_consecutive_errors:
+                logger.critical("连续 %d 次错误，退出程序", self._consecutive_errors)
+                sys.exit(1)
 
     def _on_audio_chunk(self, chunk_bytes: bytes) -> None:
-        """Called from sounddevice thread for each audio chunk.
-
-        Pushes the chunk into a thread-safe deque. ``_send_chunks_loop``
-        consumes it on the asyncio event loop.
-        """
+        """Called from sounddevice thread for each audio chunk."""
         if len(self._pending_chunks) >= self._max_pending_chunks:
-            # Drop oldest chunk to avoid unbounded growth.
             self._pending_chunks.popleft()
         self._pending_chunks.append(chunk_bytes)
 
-    async def _run_stream(self) -> None:
-        """Manage the WebSocket streaming ASR session.
+    # ── Streaming ASR (existing, mostly unchanged) ──────────────────────
 
-        Connects to the server, starts the chunk sender, and consumes
-        partial/final results from ``ASRStreamClient.iterate()``.
-        """
+    async def _run_stream(self) -> None:
+        """Manage the WebSocket streaming ASR session."""
         if self._stream_client is None:
             return
         try:
             await self._stream_client.connect()
-            # Start sender task to drain pending audio chunks.
             self._sender_task = asyncio.create_task(self._send_chunks_loop())
             async for result in self._stream_client.iterate():
                 if result.error:
@@ -297,8 +350,6 @@ class VoiceInputDaemon:
                 if result.final:
                     self._stream_final_result = result
                     break
-                # Partial result: update current text, broadcast for live preview,
-                # and type the incremental difference when no IPC client is connected.
                 if result.text != self._current_text:
                     self._current_text = result.text
                     self._broadcast_recognized(result.text)
@@ -334,7 +385,6 @@ class VoiceInputDaemon:
 
     async def _finish_stream(self) -> None:
         """Called on hotkey release: flush remaining chunks, send finish, get final result."""
-        # Allow a brief moment for queued chunks to drain.
         for _ in range(50):
             if not self._pending_chunks:
                 break
@@ -354,11 +404,10 @@ class VoiceInputDaemon:
             except Exception as exc:
                 logger.warning("Failed to send finish: %s", exc)
 
-        # Wait for the streaming reader task to produce the final result.
         if self._streaming_task is not None and self._stream_final_event is not None:
             try:
                 await asyncio.wait_for(
-                    self._stream_final_event.wait(), timeout=self.config.asr_timeout
+                    self._stream_final_event.wait(), timeout=self._config.asr_timeout
                 )
             except asyncio.TimeoutError:
                 logger.error("Timeout waiting for final streaming result")
@@ -377,40 +426,35 @@ class VoiceInputDaemon:
 
     async def _finalize_recognition(self) -> None:
         """Broadcast final result, type any remaining text, and reset state."""
-        from typing import Literal
-
-        state: Literal["idle", "recording", "recognizing", "error"] = "idle"
         if self._streaming_error:
             self._state = "idle"
-            state = "error"
-            self._broadcast_state(state, "⚠️ ASR 错误")
+            self._broadcast_state("error", "⚠️ ASR 错误")
             self._broadcast_recognized("", error=self._streaming_error)
             logger.error("❌ ASR 识别失败: %s", self._streaming_error)
+            self._consecutive_errors += 1
         elif self._stream_final_result:
             result = self._stream_final_result
             self._state = "idle"
-            state = "idle"
-            self._broadcast_state(state, "🎤 就绪")
+            self._broadcast_state("idle", "🎤 就绪")
             self._broadcast_recognized(result.text)
             logger.info('✅ ASR 识别完成: "%s"', result.text)
             if not self._clients:
                 self._type_text_incremental(result.text)
             self._typed_text = ""
+            self._consecutive_errors = 0
         else:
             self._state = "idle"
-            state = "error"
-            self._broadcast_state(state, "⚠️ 无识别结果")
+            self._broadcast_state("error", "⚠️ 无识别结果")
             logger.error("❌ ASR 未返回最终结果")
+            self._consecutive_errors += 1
+
+        if self._consecutive_errors >= self._max_consecutive_errors:
+            logger.critical("连续 %d 次错误，退出程序", self._consecutive_errors)
+            sys.exit(1)
 
     def _type_text_incremental(self, new_text: str) -> None:
-        """Type only the characters in ``new_text`` that have not been typed yet.
-
-        If the ASR model revises earlier characters, backspace the changed
-        portion and re-type the corrected suffix. This keeps the visual output
-        in sync with the latest streaming result.
-        """
+        """Type only the characters in ``new_text`` that have not been typed yet."""
         if self._clients:
-            # An external client is connected; let it handle output.
             return
         if new_text == self._typed_text:
             return
@@ -446,9 +490,109 @@ class VoiceInputDaemon:
             try:
                 await self._stream_client.close()
             except Exception as exc:
-                logger.warning("Failed to close stream client during cleanup: %s", exc)
+                logger.warning(
+                    "Failed to close stream client during cleanup: %s", exc
+                )
             self._stream_client = None
         self._pending_chunks.clear()
+
+    # ── Offline (non-streaming) ASR ────────────────────────────────────
+
+    async def _run_offline_recognition(self) -> None:
+        """Send the complete recording to the HTTP ASR endpoint and handle result."""
+        if not self._offline_recording:
+            self._state = "idle"
+            self._broadcast_state("idle", "🎤 就绪")
+            return
+
+        try:
+            client = ASRHttpClient(
+                self._config.asr_endpoint,
+                api_key=self._config.asr_api_key,
+                timeout=self._config.asr_timeout,
+            )
+            result = await client.transcribe(self._offline_recording)
+
+            if result.error:
+                self._streaming_error = result.error
+                self._consecutive_errors += 1
+                logger.error("❌ 离线 ASR 识别失败: %s", result.error)
+                self._state = "idle"
+                self._broadcast_state("error", "⚠️ ASR 错误")
+                self._broadcast_recognized("", error=result.error)
+                if self._consecutive_errors >= self._max_consecutive_errors:
+                    logger.critical("连续 %d 次识别失败，退出程序", self._consecutive_errors)
+                    sys.exit(1)
+            else:
+                self._consecutive_errors = 0
+                self._state = "idle"
+                self._broadcast_state("idle", "🎤 就绪")
+                self._broadcast_recognized(result.text)
+                logger.info('✅ ASR 识别完成: "%s"', result.text)
+                if not self._clients:
+                    self._type_text_final(result.text)
+        except Exception as exc:
+            logger.exception("❌ 离线 ASR 未预期错误")
+            self._consecutive_errors += 1
+            self._state = "idle"
+            self._broadcast_state("error", "⚠️ ASR 错误")
+            if self._consecutive_errors >= self._max_consecutive_errors:
+                sys.exit(1)
+        finally:
+            self._backend_mgr.touch_activity()
+
+    def _type_text_final(self, text: str) -> None:
+        """Type the final recognized text into the active X11 window.
+
+        Unlike streaming incremental typing, this types the entire text at once.
+        """
+        if self._clients:
+            return
+        if not text:
+            return
+        self._typed_text = text
+        self._loop.run_in_executor(None, _type_text_x11, text)
+
+    # ── Config watching and idle management ────────────────────────────
+
+    def _on_config_change(self, new_config: IMEConfig) -> None:
+        """Handle config file changes detected by ConfigWatcher.
+
+        Compares old and new config. If backend-relevant fields changed,
+        schedules a backend restart. Daemon-local fields are applied
+        immediately.
+        """
+        old = self._config
+        self._config = new_config
+
+        # Check if backend-relevant config has changed
+        backend_keys = (
+            "asr_mode",
+            "asr_model",
+            "asr_backend",
+            "asr_device",
+            "asr_endpoint",
+            "asr_auto_sleep_time",
+            "asr_backend_wait_timeout",
+        )
+        needs_restart = any(
+            getattr(old, k) != getattr(new_config, k) for k in backend_keys
+        )
+
+        if needs_restart:
+            logger.info("Backend-relevant config changed; scheduling restart")
+            asyncio.create_task(self._backend_mgr.restart(new_config))
+
+    async def _idle_check_loop(self) -> None:
+        """Periodically check if the backend should be put to sleep."""
+        while True:
+            await asyncio.sleep(5.0)
+            try:
+                await self._backend_mgr.check_idle()
+            except Exception as exc:
+                logger.warning("Idle check error: %s", exc)
+
+    # ── Broadcasting and IPC ────────────────────────────────────────────
 
     def _broadcast_state(self, state: str, message: str | None) -> None:
         """Broadcast a state update to all connected IPC clients."""
@@ -469,7 +613,9 @@ class VoiceInputDaemon:
         for writer in writers:
             try:
                 writer.write(data)
-                loop.call_soon_threadsafe(lambda w=writer: asyncio.create_task(w.drain()))
+                loop.call_soon_threadsafe(
+                    lambda w=writer: asyncio.create_task(w.drain())
+                )
             except Exception as exc:
                 logger.warning("Failed to send to client: %s", exc)
 
@@ -508,6 +654,8 @@ class VoiceInputDaemon:
 
         asyncio.create_task(read_loop())
 
+    # ── Shutdown ────────────────────────────────────────────────────────
+
     def _shutdown(self) -> None:
         """Cancel tasks and close resources on SIGTERM/SIGINT."""
         logger.info("Shutting down daemon")
@@ -517,16 +665,22 @@ class VoiceInputDaemon:
             self._sender_task.cancel()
         if self._serve_task is not None:
             self._serve_task.cancel()
+        if self._config_watch_task is not None and not self._config_watch_task.done():
+            self._config_watch_task.cancel()
+        if self._idle_check_task is not None and not self._idle_check_task.done():
+            self._idle_check_task.cancel()
         if self._server:
             self._server.close()
         self.hotkey.stop()
         self.recorder.close()
+        # Stop backend asynchronously
+        asyncio.ensure_future(self._backend_mgr.stop())
 
 
 async def main() -> None:
-    """Entry point: load config and run the daemon forever."""
-    config = IMEConfig.load()
-    daemon = VoiceInputDaemon(config)
+    """Entry point: init ConfigWatcher, create daemon, run forever."""
+    watcher = ConfigWatcher()
+    daemon = VoiceInputDaemon(watcher)
     await daemon.start()
     await daemon.run_forever()
 

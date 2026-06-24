@@ -64,6 +64,16 @@ async def test_daemon_streaming_recognize_flow(tmp_path: Path) -> None:
     from qwen3_asr_ime.daemon.service import VoiceInputDaemon
 
     daemon = VoiceInputDaemon(config)
+
+    # Mock BackendManager to avoid spawning real backend process
+    daemon._backend_mgr = AsyncMock()
+    daemon._backend_mgr.is_running = True
+    daemon._backend_mgr.spawn = AsyncMock()
+    daemon._backend_mgr.wait_ready = AsyncMock()
+    daemon._backend_mgr.touch_activity = MagicMock()
+    daemon._backend_mgr.check_idle = AsyncMock(return_value=False)
+    daemon._backend_mgr.stop = AsyncMock()
+
     silent_wav = _make_silent_wav(duration_sec=0.2)
 
     mock_client = AsyncMock()

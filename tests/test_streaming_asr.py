@@ -21,6 +21,21 @@ from qwen3_asr_ime.daemon.asr_client import ASRResult, ASRStreamClient  # noqa: 
 from qwen3_asr_ime.daemon.hotkey import HotkeyEvent  # noqa: E402
 
 
+from qwen3_asr_ime.daemon.service import VoiceInputDaemon  # noqa: E402
+
+
+def _setup_daemon_backend_mock(daemon: VoiceInputDaemon) -> None:
+    """Mock BackendManager on a daemon instance so tests don't spawn real backend."""
+    from unittest.mock import AsyncMock, MagicMock
+    daemon._backend_mgr = AsyncMock()
+    daemon._backend_mgr.is_running = True
+    daemon._backend_mgr.spawn = AsyncMock()
+    daemon._backend_mgr.wait_ready = AsyncMock()
+    daemon._backend_mgr.touch_activity = MagicMock()
+    daemon._backend_mgr.check_idle = AsyncMock(return_value=False)
+    daemon._backend_mgr.stop = AsyncMock()
+
+
 def _make_silent_wav(duration_sec: float = 0.1) -> bytes:
     sample_rate = 16000
     samples = int(sample_rate * duration_sec)
@@ -106,6 +121,7 @@ async def test_daemon_streaming_flow(tmp_path: Path) -> None:
     from qwen3_asr_ime.daemon.service import VoiceInputDaemon
 
     daemon = VoiceInputDaemon(config)
+    _setup_daemon_backend_mock(daemon)
 
     # Mock the streaming client
     mock_client = AsyncMock()
@@ -224,6 +240,7 @@ async def test_daemon_streaming_types_partial_results(tmp_path: Path) -> None:
     from qwen3_asr_ime.daemon.service import VoiceInputDaemon
 
     daemon = VoiceInputDaemon(config)
+    _setup_daemon_backend_mock(daemon)
 
     mock_client = AsyncMock()
     mock_client.connect = AsyncMock()
@@ -316,6 +333,7 @@ async def test_daemon_interrupt_aborts_recognition(tmp_path: Path) -> None:
     from qwen3_asr_ime.daemon.service import VoiceInputDaemon
 
     daemon = VoiceInputDaemon(config)
+    _setup_daemon_backend_mock(daemon)
 
     mock_client = AsyncMock()
     mock_client.connect = AsyncMock()
