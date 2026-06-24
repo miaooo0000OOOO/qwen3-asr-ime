@@ -202,3 +202,75 @@ class ASRStreamClient:
     async def __aexit__(self, exc_type, exc, tb) -> None:
         """Async context manager exit: close the connection."""
         await self.close()
+
+
+class ASRHttpClient:
+    """Async HTTP client for non-streaming (offline) ASR recognition.
+
+    Sends the complete WAV audio as a POST to ``/v1/asr/transcribe`` and
+    returns a single ``ASRResult`` with the final transcription.
+
+    Typical usage::
+
+        client = ASRHttpClient("http://127.0.0.1:8000")
+        result = await client.transcribe(wav_bytes)
+        print(result.text)
+    """
+
+    def __init__(self, endpoint: str, api_key: str = "dummy", timeout: float = 30.0):
+        """Initialize the client.
+
+        Args:
+            endpoint: HTTP endpoint of the ASR server (e.g.
+                ``"http://127.0.0.1:8000"``).
+            api_key: Bearer token sent in the Authorization header.
+            timeout: Total request timeout in seconds.
+        """
+        self._transcribe_url = f"{endpoint.rstrip('/')}/v1/asr/transcribe"
+        self._api_key = api_key
+        self._timeout = timeout
+
+    async def transcribe(
+        self, wav_bytes: bytes, language: str | None = None
+    ) -> ASRResult:
+        """Send a complete WAV recording for recognition.
+
+        Args:
+            wav_bytes: WAV-encoded audio bytes (full recording).
+            language: Optional language hint (e.g. ``"zh"``, ``"en"``).
+
+        Returns:
+            ``ASRResult`` with ``final=True`` on success, or ``error`` set
+            on failure. Never raises — errors are returned in the result.
+        """
+        import aiohttp
+
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        params = {}
+        if language:
+            params["language"] = language
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    self._transcribe_url,
+                    data=wav_bytes,
+                    headers=headers,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=self._timeout),
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.json()
+                        return ASRResult(
+                            text=body.get("text", ""),
+                            language=body.get("language"),
+                            final=True,
+                        )
+                    else:
+                        body_text = await resp.text()
+                        return ASRResult(
+                            text="",
+                            error=f"ASR server returned {resp.status}: {body_text[:200]}",
+                        )
+        except Exception as exc:
+            return ASRResult(text="", error=f"ASR request failed: {exc}")
