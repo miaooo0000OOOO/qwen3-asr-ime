@@ -1,7 +1,6 @@
 [Unit]
 Description=Qwen3-ASR Voice Input Daemon
-After=graphical-session.target qwen3-asr-server.service
-Requires=qwen3-asr-server.service
+After=graphical-session.target
 
 [Service]
 Type=simple

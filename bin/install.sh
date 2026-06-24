@@ -17,7 +17,7 @@ SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 mkdir -p "${CONFIG_DIR}" "${SYSTEMD_USER_DIR}"
 
 # Install Python package
-python3 -m pip install -e "${PROJECT_DIR}[vllm]"
+python3 -m pip install -e "${PROJECT_DIR}[vllm,transformers]"
 
 # Create default config if missing
 if [[ ! -f "${CONFIG_DIR}/config.yaml" ]]; then
@@ -25,13 +25,22 @@ cat > "${CONFIG_DIR}/config.yaml" <<'EOF'
 hotkey:
   device: "pynput"
   key: "CTRL"
+audio:
+  sample_rate: 16000
+  channels: 1
+  format: "int16"
+  chunk_ms: 20
 asr:
   endpoint: "http://127.0.0.1:8000"
-  model: "Qwen/Qwen3-ASR-0.6B"
+  mode: "offline"
+  model: "1.7B"
+  backend: "transformers"
   device: "auto"
   quantization: "auto"
   api_key: "dummy"
   timeout: 30.0
+  auto_sleep_time: 300
+  backend_wait_timeout: 120
 ipc:
   socket_path: "/run/user/${UID}/qwen3-asr-ime.sock"
 logging:
