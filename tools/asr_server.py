@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qwen3-ASR streaming server (WebSocket-only, requires vLLM backend)."""
+"""Qwen3-ASR server — supports streaming (vLLM) and non-streaming (transformers/vLLM)."""
 
 from __future__ import annotations
 
@@ -13,28 +13,51 @@ from typing import Any
 
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("asr-server")
 
-app = FastAPI(title="Qwen3-ASR Streaming Server")
+app = FastAPI(title="Qwen3-ASR Server")
 
 _model = None
 _model_backend: str | None = None
+_server_mode: str = "offline"
 
-MODEL_PATH = os.environ.get("QWEN3_ASR_MODEL", "/Data2/Models/Qwen3-ASR-0.6B")
+MODEL_PATH = os.environ.get("QWEN3_ASR_MODEL", "/Data2/Models/Qwen3-ASR-1.7B")
+SERVER_MODE = os.environ.get("QWEN3_ASR_MODE", "offline")
+SERVER_BACKEND = os.environ.get("QWEN3_ASR_BACKEND", "transformers")
+SERVER_DEVICE = os.environ.get("QWEN3_ASR_DEVICE", "auto")
+SERVER_PORT = int(os.environ.get("QWEN3_ASR_PORT", "8000"))
 
 
 def _load_model() -> None:
-    global _model, _model_backend
+    global _model, _model_backend, _server_mode
     if _model is not None:
         return
 
-    backend = os.environ.get("QWEN3_ASR_BACKEND", "vllm").lower()
-    if backend != "vllm":
-        raise RuntimeError("Streaming server requires vLLM backend")
+    _server_mode = SERVER_MODE
+    backend = SERVER_BACKEND
 
+    if _server_mode == "streaming" and backend != "vllm":
+        raise RuntimeError(
+            f"streaming mode requires vllm backend, got {backend}"
+        )
+    if _server_mode == "offline" and backend not in ("transformers", "vllm"):
+        raise RuntimeError(
+            f"offline mode requires transformers or vllm backend, got {backend}"
+        )
+
+    if backend == "vllm":
+        _load_vllm()
+    elif backend == "transformers":
+        _load_transformers()
+    else:
+        raise RuntimeError(f"Unsupported backend: {backend}")
+
+
+def _load_vllm() -> None:
+    global _model, _model_backend
     from qwen_asr import Qwen3ASRModel
 
     gpu_mem = float(os.environ.get("QWEN3_ASR_GPU_MEM", "0.9"))
@@ -61,6 +84,26 @@ def _load_model() -> None:
     logger.info("Loaded vLLM backend in %.1fs", time.time() - t0)
 
 
+def _load_transformers() -> None:
+    global _model, _model_backend
+    from qwen_asr import Qwen3ASRModel
+
+    device = SERVER_DEVICE
+
+    logger.info(
+        "Loading Qwen3-ASR (%s) with transformers backend (device=%s) ...",
+        MODEL_PATH,
+        device,
+    )
+    t0 = time.time()
+    if device == "auto":
+        _model = Qwen3ASRModel.from_pretrained(MODEL_PATH)
+    else:
+        _model = Qwen3ASRModel.from_pretrained(MODEL_PATH, device=device)
+    _model_backend = "transformers"
+    logger.info("Loaded transformers backend in %.1fs", time.time() - t0)
+
+
 def _decode_audio(raw: bytes) -> np.ndarray[Any, np.dtype[np.float32]]:
     """Decode WAV bytes to float32 mono array."""
     with wave.open(io.BytesIO(raw), "rb") as wf:
@@ -72,6 +115,45 @@ def _decode_audio(raw: bytes) -> np.ndarray[Any, np.dtype[np.float32]]:
             data = data.reshape(-1, wf.getnchannels()).mean(axis=1)
         data /= np.iinfo(dtype).max
     return data.astype(np.float32)
+
+
+@app.post("/v1/asr/transcribe")
+async def asr_transcribe(request: Request) -> dict[str, Any]:
+    """Non-streaming (offline) ASR endpoint.
+
+    Accepts raw WAV bytes in the request body. Returns a JSON object with
+    ``text`` and ``language`` fields.
+
+    Query params:
+        language: Optional language hint (e.g. ``"zh"``, ``"en"``).
+    """
+    global _model
+    _load_model()
+    assert _model is not None
+    assert _model_backend is not None
+
+    language = request.query_params.get("language")
+
+    try:
+        raw_body = await request.body()
+        if not raw_body:
+            return {"text": "", "language": language, "error": "Empty request body"}
+
+        # Decode WAV to float32 numpy array
+        pcm = _decode_audio(raw_body)
+
+        # transcribe accepts (np.ndarray, sample_rate) tuple
+        results = _model.transcribe(
+            (pcm, 16000), language=language
+        )
+        if results:
+            first = results[0]
+            return {"text": first.text, "language": first.language}
+        else:
+            return {"text": "", "language": language}
+    except Exception as exc:
+        logger.exception("Non-streaming recognition failed")
+        return {"text": "", "language": language, "error": str(exc)}
 
 
 @app.websocket("/v1/asr/stream")
@@ -154,9 +236,9 @@ async def asr_stream(websocket: WebSocket) -> None:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"status": "ok", "backend": _model_backend}
+    return {"status": "ok", "backend": _model_backend, "mode": _server_mode}
 
 
 if __name__ == "__main__":
     _load_model()
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=SERVER_PORT)
