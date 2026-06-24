@@ -85,10 +85,19 @@ def _load_vllm() -> None:
 
 
 def _load_transformers() -> None:
+    """Load the Qwen3-ASR model with the transformers backend.
+
+    ``Qwen3ASRModel.from_pretrained`` forwards its kwargs to
+    ``AutoModel.from_pretrained``. The previous implementation passed a raw
+    ``device`` argument, which ``from_pretrained`` ignores and causes the
+    model to fall back to CPU. This function uses ``device_map`` instead,
+    which is the correct transformers API for placing the model on GPU/CPU.
+    """
     global _model, _model_backend
     from qwen_asr import Qwen3ASRModel
+    import torch
 
-    device = SERVER_DEVICE
+    device = SERVER_DEVICE.lower().strip() if SERVER_DEVICE else "auto"
 
     logger.info(
         "Loading Qwen3-ASR (%s) with transformers backend (device=%s) ...",
@@ -96,12 +105,22 @@ def _load_transformers() -> None:
         device,
     )
     t0 = time.time()
-    if device == "auto":
-        _model = Qwen3ASRModel.from_pretrained(MODEL_PATH)
+    kwargs: dict[str, Any] = {}
+    if device == "cpu":
+        kwargs["device_map"] = "cpu"
     else:
-        _model = Qwen3ASRModel.from_pretrained(MODEL_PATH, device=device)
+        # "auto", "cuda", "cuda:0", etc. -> let transformers place model on GPU(s)
+        kwargs["device_map"] = "auto"
+        kwargs["torch_dtype"] = torch.float16
+
+    _model = Qwen3ASRModel.from_pretrained(MODEL_PATH, **kwargs)
     _model_backend = "transformers"
-    logger.info("Loaded transformers backend in %.1fs", time.time() - t0)
+    actual_device = getattr(_model, "device", "unknown")
+    logger.info(
+        "Loaded transformers backend in %.1fs (device=%s)",
+        time.time() - t0,
+        actual_device,
+    )
 
 
 def _decode_audio(raw: bytes) -> np.ndarray[Any, np.dtype[np.float32]]:

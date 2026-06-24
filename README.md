@@ -33,14 +33,16 @@ pip install modelscope
 # 8GB 显存推荐 0.6B（默认）
 modelscope download --model Qwen/Qwen3-ASR-0.6B --local_dir /Data2/Models/Qwen3-ASR-0.6B
 
-# 显存充足可下载 1.7B，并修改 systemd 服务中的 QWEN3_ASR_MODEL
+# 显存充足可下载 1.7B，并修改服务中的 QWEN3_ASR_MODEL
 # modelscope download --model Qwen/Qwen3-ASR-1.7B --local_dir /Data2/Models/Qwen3-ASR-1.7B
+# 编辑 ~/.config/systemd/user/qwen3-asr-ime.service 中的 Environment=QWEN3_ASR_MODEL
 
-# 4. 启动 ASR 服务
-python tools/asr_server.py
+# 4. 启动服务
+# install.sh 已注册 systemd user service；守护进程会按需启动 ASR backend。
+# 如需手动调试后端，可单独运行：python tools/asr_server.py
+systemctl --user start qwen3-asr-ime
 
-# 5. 守护进程已由 install.sh 启动（systemd user service）
-#    按下 Ctrl 录音，松开输入到当前焦点窗口
+# 5. 按下 Ctrl 录音，松开输入到当前焦点窗口
 ```
 
 ## 卸载
@@ -61,11 +63,12 @@ Ctrl (pynput) → 守护进程 → 录音 (sounddevice) → WebSocket /v1/asr/st
 
 ## 服务端
 
-`tools/asr_server.py` 仅提供 WebSocket 流式接口：
+`tools/asr_server.py` 提供两个接口：
+
+- `POST /v1/asr/transcribe`：非流式识别，返回完整录音的一次性转写结果（当前默认配置使用此接口）。
+- `WebSocket /v1/asr/stream`：流式识别，按住热键时守护进程实时发送 PCM16 音频 chunk，服务端调用 `Qwen3ASRModel.streaming_transcribe()` 增量识别并推送 partial/final 结果。
 
 ### `WebSocket /v1/asr/stream`
-
-按住热键时守护进程即建立 WebSocket，实时发送 PCM16 音频 chunk，服务端调用 `Qwen3ASRModel.streaming_transcribe()` 增量识别并推送 partial/final 结果。
 
 **消息协议（JSON）：**
 
@@ -82,8 +85,6 @@ Ctrl (pynput) → 守护进程 → 录音 (sounddevice) → WebSocket /v1/asr/st
 
 ### 环境变量
 
-| 变量 | 说明 | 默认值 |
-|---|---|---|
 | 变量 | 说明 | 默认值 |
 |---|---|---|
 | `QWEN3_ASR_MODEL` | 模型路径或 HuggingFace repo | `/Data2/Models/Qwen3-ASR-0.6B` |
@@ -120,4 +121,3 @@ asr:
 
 ## 许可
 
-MIT

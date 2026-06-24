@@ -17,6 +17,8 @@ CONFIG_DIR="${HOME}/.config/qwen3-asr-ime"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 
 echo "Stopping and disabling systemd user services..."
+# qwen3-asr-server.service is no longer used; keep it in the list for a clean
+# uninstall of older installations.
 systemctl --user stop qwen3-asr-ime qwen3-asr-server 2>/dev/null || true
 systemctl --user disable qwen3-asr-ime qwen3-asr-server 2>/dev/null || true
 

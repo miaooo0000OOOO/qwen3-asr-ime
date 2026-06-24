@@ -51,7 +51,10 @@ fi
 # Install systemd user services (template → instantiate)
 PYTHON="$(which python3)"
 
-for svc in qwen3-asr-server qwen3-asr-ime; do
+# Install only the daemon service. The daemon itself starts the ASR backend
+# subprocess on demand via BackendManager, so a separate server service is not
+# needed and would conflict on port 8000.
+for svc in qwen3-asr-ime; do
     sed -e "s|{{PYTHON}}|${PYTHON}|g" \
         -e "s|{{PROJECT_DIR}}|${PROJECT_DIR}|g" \
         "${PROJECT_DIR}/systemd/${svc}.service" \
@@ -59,7 +62,6 @@ for svc in qwen3-asr-server qwen3-asr-ime; do
 done
 
 systemctl --user daemon-reload
-systemctl --user enable --now qwen3-asr-server || true
 systemctl --user enable --now qwen3-asr-ime || true
 
 echo ""
@@ -67,7 +69,7 @@ echo "==================== Installation Summary ===================="
 echo ""
 echo "  ✓ sudo apt-get install -y portaudio19-dev python3-dev"
 echo "  ✓ Python package installed"
-echo "  ✓ systemd user service enabled"
+echo "  ✓ qwen3-asr-ime systemd user service enabled"
 echo ""
 echo "  Hold the configured hotkey (default: Ctrl) to record,"
 echo "  release to input recognized text into the focused window."
