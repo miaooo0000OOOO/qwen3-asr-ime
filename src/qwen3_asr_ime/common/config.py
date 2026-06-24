@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, NoReturn
 
 import yaml
 
@@ -154,3 +154,161 @@ class IMEConfig:
 
         cls._validate(data)
         return cls(**data)
+
+
+class ConfigWatcher:
+    """Periodically polls config file mtime; reloads on change.
+
+    If the config file does not exist, creates a default one via
+    ``IMEConfig.defaults()`` serialized to YAML. Failure to create or
+    first-load the config results in ``sys.exit(1)``.
+
+    On subsequent reload failures, the old config is retained and a
+    warning is logged — the program does NOT exit.
+
+    Attributes:
+        config: The currently-effective ``IMEConfig``.
+    """
+
+    _POLL_INTERVAL: float = 5.0  # seconds (hardcoded, not in config file)
+
+    def __init__(self, path: Path | None = None) -> None:
+        import logging
+        import sys
+
+        self._logger = logging.getLogger(__name__)
+        if path is None:
+            path = (
+                Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+                / "qwen3-asr-ime"
+                / "config.yaml"
+            )
+        self._path = path
+
+        # Ensure config file exists
+        if not self._path.exists():
+            self._create_default()
+
+        # First load — must succeed or exit
+        try:
+            self._config = IMEConfig.load(self._path)
+        except Exception as exc:
+            print(
+                f"ERROR: 配置文件解析失败: {self._path}: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        self._mtime = self._path.stat().st_mtime
+
+    @property
+    def config(self) -> IMEConfig:
+        return self._config
+
+    def _create_default(self) -> None:
+        """Create parent directory and default config YAML. Exits on failure."""
+        import sys
+        import yaml
+
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            print(
+                f"ERROR: 无法创建配置目录: {self._path.parent}: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        defaults = IMEConfig.defaults()
+        yaml_data = {
+            "hotkey": {
+                "device": defaults.hotkey_device,
+                "key": defaults.hotkey_key,
+            },
+            "audio": {
+                "sample_rate": defaults.audio_sample_rate,
+                "channels": defaults.audio_channels,
+                "format": defaults.audio_format,
+                "chunk_ms": defaults.audio_chunk_ms,
+            },
+            "asr": {
+                "endpoint": defaults.asr_endpoint,
+                "mode": defaults.asr_mode,
+                "model": defaults.asr_model,
+                "backend": defaults.asr_backend,
+                "device": defaults.asr_device,
+                "quantization": defaults.asr_quantization,
+                "api_key": defaults.asr_api_key,
+                "timeout": defaults.asr_timeout,
+                "auto_sleep_time": defaults.asr_auto_sleep_time,
+                "backend_wait_timeout": defaults.asr_backend_wait_timeout,
+            },
+            "ipc": {
+                "socket_path": defaults.ipc_socket_path,
+            },
+            "logging": {
+                "level": defaults.log_level,
+            },
+        }
+        try:
+            with open(self._path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(yaml_data, f, allow_unicode=True, default_flow_style=False)
+        except OSError as exc:
+            print(
+                f"ERROR: 无法创建默认配置文件: {self._path}: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        self._logger.info("Created default config at %s", self._path)
+
+    def _reload(self) -> None:
+        """Attempt to reload config from disk.
+
+        On failure, retains the old config and logs a warning — does NOT exit.
+        Called only for runtime reloads, not initial load.
+        """
+        try:
+            new_config = IMEConfig.load(self._path)
+            self._config = new_config
+            self._logger.info("Config reloaded from %s", self._path)
+        except Exception as exc:
+            self._logger.warning(
+                "Failed to reload config from %s: %s — keeping previous config",
+                self._path,
+                exc,
+            )
+
+    async def watch_loop(self, on_change: Callable[[IMEConfig], None]) -> NoReturn:
+        """Run forever: poll config mtime every _POLL_INTERVAL seconds.
+
+        When the mtime changes, reload the config and invoke ``on_change``
+        with the new ``IMEConfig`` if it differs from the previous one.
+
+        If the file is deleted, re-create the default config.
+
+        Args:
+            on_change: Async callback receiving the new config when it changes.
+                Must not raise.
+        """
+        import asyncio
+        while True:
+            await asyncio.sleep(self._POLL_INTERVAL)
+            try:
+                stat = self._path.stat()
+            except FileNotFoundError:
+                self._logger.warning("Config file deleted; re-creating default")
+                self._create_default()
+                self._mtime = self._path.stat().st_mtime
+                continue
+
+            if stat.st_mtime != self._mtime:
+                old = self._config
+                self._reload()
+                self._mtime = stat.st_mtime
+                if self._config != old:
+                    try:
+                        on_change(self._config)
+                    except Exception as exc:
+                        self._logger.exception(
+                            "Config change callback failed: %s", exc
+                        )
