@@ -49,7 +49,6 @@ class IMEConfig:
         backend = data.get("asr_backend", "transformers")
         valid_combos = {
             ("offline", "transformers"),
-            ("offline", "vllm"),
             ("streaming", "vllm"),
         }
         if (mode, backend) not in valid_combos:
