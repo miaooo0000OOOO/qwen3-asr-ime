@@ -1,5 +1,4 @@
 """Tests for ConfigWatcher."""
-import asyncio
 import tempfile
 import time
 from pathlib import Path
@@ -90,11 +89,44 @@ asr:
         watcher = ConfigWatcher(path=config_path)
         old_sleep = watcher.config.asr_auto_sleep_time
 
-        # Corrupt the file
+        # Corrupt the file (YAML parse error)
         time.sleep(0.01)
         config_path.write_text("this is not valid: yaml: :::")
 
         watcher._mtime = 0
         watcher._reload()
         # Config should be unchanged
+        assert watcher.config.asr_auto_sleep_time == old_sleep
+
+
+def test_reload_invalid_combo_keeps_old_config():
+    """Runtime reload with invalid mode+backend does NOT exit — keeps old config."""
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / "config.yaml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text("""
+asr:
+  mode: "offline"
+  backend: "transformers"
+  auto_sleep_time: 60
+""")
+        watcher = ConfigWatcher(path=config_path)
+        old_mode = watcher.config.asr_mode
+        old_backend = watcher.config.asr_backend
+        old_sleep = watcher.config.asr_auto_sleep_time
+
+        # Change to invalid combo: streaming + transformers
+        time.sleep(0.01)
+        config_path.write_text("""
+asr:
+  mode: "streaming"
+  backend: "transformers"
+  auto_sleep_time: 120
+""")
+
+        watcher._mtime = 0
+        # This must NOT raise SystemExit — old config is kept
+        watcher._reload()
+        assert watcher.config.asr_mode == old_mode
+        assert watcher.config.asr_backend == old_backend
         assert watcher.config.asr_auto_sleep_time == old_sleep

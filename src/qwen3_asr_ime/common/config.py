@@ -271,7 +271,7 @@ class ConfigWatcher:
             new_config = IMEConfig.load(self._path)
             self._config = new_config
             self._logger.info("Config reloaded from %s", self._path)
-        except Exception as exc:
+        except (Exception, SystemExit) as exc:
             self._logger.warning(
                 "Failed to reload config from %s: %s — keeping previous config",
                 self._path,
