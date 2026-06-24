@@ -87,8 +87,9 @@ async def test_full_daemon_flow(tmp_path: Path) -> None:
         ms.close = MagicMock()
         return ms
 
-    with patch("sounddevice.InputStream", side_effect=stream_constructor), patch(
-        "pynput.keyboard.Listener", side_effect=listener_constructor
+    with (
+        patch("sounddevice.InputStream", side_effect=stream_constructor),
+        patch("pynput.keyboard.Listener", side_effect=listener_constructor),
     ):
         # Import the daemon module after mocks are in place
         from qwen3_asr_ime.daemon.service import VoiceInputDaemon

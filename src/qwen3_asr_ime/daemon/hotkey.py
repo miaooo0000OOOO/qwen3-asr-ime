@@ -24,6 +24,11 @@ _MODIFIER_KEYS: dict[str, tuple[keyboard.Key, keyboard.Key]] = {
     "SUPER": (keyboard.Key.cmd_l, keyboard.Key.cmd_r),
 }
 
+# All standalone modifier keys. These are ignored for interrupt detection:
+# pressing Shift/Alt/Super while Ctrl is held should not abort voice input.
+_ALL_MODIFIER_KEYS: set[keyboard.Key | keyboard.KeyCode] = set().union(*_MODIFIER_KEYS.values())
+
+
 # Non-modifier special keys addressable by canonical names in combo strings.
 _SPECIAL_KEYS: dict[str, keyboard.Key] = {
     "SPACE": keyboard.Key.space,
@@ -38,7 +43,9 @@ _SPECIAL_KEYS: dict[str, keyboard.Key] = {
 }
 
 
-def _normalized_key(key: keyboard.Key | keyboard.KeyCode | None) -> keyboard.Key | keyboard.KeyCode | None:
+def _normalized_key(
+    key: keyboard.Key | keyboard.KeyCode | None,
+) -> keyboard.Key | keyboard.KeyCode | None:
     """Return a normalized form of a pynput key for set comparison.
 
     Character keys are normalized to lower-case so that ``"R"`` in a combo
@@ -53,9 +60,15 @@ def _normalized_key(key: keyboard.Key | keyboard.KeyCode | None) -> keyboard.Key
 
 @dataclass(frozen=True, slots=True)
 class HotkeyEvent:
-    """A hotkey press or release event."""
+    """A hotkey press, release, or interrupt event.
 
-    action: Literal["press", "release"]
+    An ``interrupt`` is fired when the user presses a non-target key while the
+    hotkey chord is already held (e.g. Ctrl+C while ``"CTRL"`` is configured).
+    It signals that the user actually wants the underlying shortcut, not voice
+    input, and the current session should be aborted.
+    """
+
+    action: Literal["press", "release", "interrupt"]
 
 
 class PynputHotkeyListener:
@@ -82,6 +95,7 @@ class PynputHotkeyListener:
         self.key_combo = key_combo
         self.on_event = on_event
         self._triggered = False
+        self._interrupted = False
         self._pressed: set[keyboard.Key | keyboard.KeyCode] = set()
         self._target_keys = self._parse_combo(key_combo)
         # Flex mode: for single-modifier combos like "CTRL", any target key
@@ -144,10 +158,21 @@ class PynputHotkeyListener:
         if self._any_mode:
             if from_key and not self._triggered:
                 self._triggered = True
+                self._interrupted = False
                 self.on_event(HotkeyEvent("press"))
+            elif self._triggered and not self._interrupted and not from_key:
+                if norm in _ALL_MODIFIER_KEYS:
+                    logger.debug("Ignoring modifier press while hotkey held: %s", norm)
+                    return
+                # A non-target, non-modifier key was pressed while the hotkey is held.
+                # Treat this as the user wanting the real shortcut, not voice input.
+                logger.info("Interrupting voice input due to key: %s", norm)
+                self._interrupted = True
+                self.on_event(HotkeyEvent("interrupt"))
         else:
             if self._pressed == self._target_keys and not self._triggered:
                 self._triggered = True
+                self._interrupted = False
                 self.on_event(HotkeyEvent("press"))
 
     def _on_release(self, key: keyboard.Key | keyboard.KeyCode | None) -> None:
@@ -161,10 +186,12 @@ class PynputHotkeyListener:
         if self._any_mode:
             if from_key and self._triggered and not self._pressed & self._target_keys:
                 self._triggered = False
+                self._interrupted = False
                 self.on_event(HotkeyEvent("release"))
         else:
             if from_key and self._triggered:
                 self._triggered = False
+                self._interrupted = False
                 self.on_event(HotkeyEvent("release"))
 
 

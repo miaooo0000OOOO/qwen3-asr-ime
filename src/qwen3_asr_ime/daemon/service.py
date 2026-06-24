@@ -57,6 +57,87 @@ def _type_text_x11(text: str) -> None:
     Controller().type(text)
 
 
+def _type_incremental_x11(to_delete: int, text: str) -> None:
+    """Delete ``to_delete`` characters then type ``text`` into the active window.
+
+    This implementation avoids ``pynput.keyboard.Controller.type``'s keycode
+    borrowing limits, which cause ``InvalidCharacterException`` for long
+    Chinese strings. It uses a single scratch keycode and synthetic X events
+    with ``state=0`` so that physical modifiers (e.g. the held Ctrl hotkey)
+    do not corrupt the injected characters.
+    """
+    import time
+
+    import Xlib.display
+    import Xlib.X
+    import Xlib.XK
+    from pynput._util.xorg import char_to_keysym
+
+    display = Xlib.display.Display()
+    try:
+        focus = display.get_input_focus().focus
+        root = display.screen().root
+        send_event = getattr(focus, "send_event", lambda event: display.send_event(focus, event))
+
+        def _send_keycode(keycode: int, state: int = 0) -> None:
+            for is_press in (True, False):
+                event_cls = (
+                    Xlib.display.event.KeyPress if is_press else Xlib.display.event.KeyRelease
+                )
+                send_event(
+                    event_cls(
+                        detail=keycode,
+                        state=state,
+                        time=0,
+                        root=root,
+                        window=focus,
+                        same_screen=0,
+                        child=Xlib.X.NONE,
+                        root_x=0,
+                        root_y=0,
+                        event_x=0,
+                        event_y=0,
+                    )
+                )
+            display.sync()
+
+        # Backspace: use an explicit synthetic event to avoid pynput borrowing.
+        backspace_kc = display.keysym_to_keycode(Xlib.XK.XK_BackSpace)
+        for _ in range(to_delete):
+            _send_keycode(backspace_kc)
+            time.sleep(0.005)
+
+        if not text:
+            return
+
+        # Find an unused scratch keycode to temporarily map Unicode characters.
+        min_kc = display.display.info.min_keycode
+        max_kc = display.display.info.max_keycode
+        mapping = display.get_keyboard_mapping(min_kc, max_kc - min_kc + 1)
+        scratch_kc = None
+        for i, keysyms in enumerate(mapping):
+            if all(k == 0 for k in keysyms):
+                scratch_kc = min_kc + i
+                break
+        if scratch_kc is None:
+            scratch_kc = max_kc
+
+        for ch in text:
+            keysym = char_to_keysym(ch)
+            if not keysym:
+                continue
+            display.change_keyboard_mapping(scratch_kc, [(keysym,)])
+            display.sync()
+            _send_keycode(scratch_kc)
+            time.sleep(0.01)
+
+        # Restore the scratch keycode.
+        display.change_keyboard_mapping(scratch_kc, [(Xlib.XK.NoSymbol,)])
+        display.sync()
+    finally:
+        display.close()
+
+
 class VoiceInputDaemon:
     """Daemon that orchestrates hotkey, recording, streaming ASR, IPC, and typing.
 
@@ -103,6 +184,7 @@ class VoiceInputDaemon:
         self._max_pending_chunks = 200  # ~4 seconds at 20ms/chunk
         self._streaming_error: str | None = None
         self._current_text: str = ""
+        self._typed_text: str = ""
         self._stream_final_result: ASRResult | None = None
         self._stream_final_event: asyncio.Event | None = None
 
@@ -151,6 +233,7 @@ class VoiceInputDaemon:
             if event.action == "press" and self._state == "idle":
                 self._state = "recording"
                 self._current_text = ""
+                self._typed_text = ""
                 self._streaming_error = None
                 self._stream_final_result = None
                 self._stream_final_event = asyncio.Event()
@@ -173,6 +256,13 @@ class VoiceInputDaemon:
                     "⬆ Ctrl 松开 → 停止录音 (%.1f 秒, %d KB)", dur, len(audio_bytes) // 1024
                 )
                 asyncio.create_task(self._finish_stream())
+            elif event.action == "interrupt" and self._state == "recording":
+                logger.info("⛔ 检测到组合键，中断语音输入")
+                self._state = "idle"
+                self._broadcast_state("idle", "🎤 就绪")
+                self.recorder.stop()
+                self._pending_chunks.clear()
+                asyncio.create_task(self._cleanup_streaming())
         except Exception:
             logger.exception("❌ 热键处理错误")
 
@@ -207,10 +297,12 @@ class VoiceInputDaemon:
                 if result.final:
                     self._stream_final_result = result
                     break
-                # Partial result: update current text and broadcast for live preview.
+                # Partial result: update current text, broadcast for live preview,
+                # and type the incremental difference when no IPC client is connected.
                 if result.text != self._current_text:
                     self._current_text = result.text
                     self._broadcast_recognized(result.text)
+                    self._type_text_incremental(result.text)
         except Exception as exc:
             self._streaming_error = str(exc)
             logger.exception("❌ 流式 ASR 会话失败")
@@ -284,10 +376,9 @@ class VoiceInputDaemon:
             self._stream_client = None
 
     async def _finalize_recognition(self) -> None:
-        """Broadcast final result, type text, and reset state."""
+        """Broadcast final result, type any remaining text, and reset state."""
         from typing import Literal
 
-        loop = self._loop
         state: Literal["idle", "recording", "recognizing", "error"] = "idle"
         if self._streaming_error:
             self._state = "idle"
@@ -303,12 +394,61 @@ class VoiceInputDaemon:
             self._broadcast_recognized(result.text)
             logger.info('✅ ASR 识别完成: "%s"', result.text)
             if not self._clients:
-                loop.run_in_executor(None, _type_text_x11, result.text)
+                self._type_text_incremental(result.text)
+            self._typed_text = ""
         else:
             self._state = "idle"
             state = "error"
             self._broadcast_state(state, "⚠️ 无识别结果")
             logger.error("❌ ASR 未返回最终结果")
+
+    def _type_text_incremental(self, new_text: str) -> None:
+        """Type only the characters in ``new_text`` that have not been typed yet.
+
+        If the ASR model revises earlier characters, backspace the changed
+        portion and re-type the corrected suffix. This keeps the visual output
+        in sync with the latest streaming result.
+        """
+        if self._clients:
+            # An external client is connected; let it handle output.
+            return
+        if new_text == self._typed_text:
+            return
+        old = self._typed_text
+        common = 0
+        for a, b in zip(old, new_text):
+            if a != b:
+                break
+            common += 1
+        to_delete = len(old) - common
+        to_type = new_text[common:]
+        self._typed_text = new_text
+        if to_delete or to_type:
+            self._loop.run_in_executor(None, _type_incremental_x11, to_delete, to_type)
+
+    async def _cleanup_streaming(self) -> None:
+        """Cancel streaming tasks and close the client without typing anything."""
+        if self._sender_task is not None and not self._sender_task.done():
+            self._sender_task.cancel()
+            try:
+                await self._sender_task
+            except asyncio.CancelledError:
+                pass
+            self._sender_task = None
+        if self._streaming_task is not None and not self._streaming_task.done():
+            self._streaming_task.cancel()
+            try:
+                await self._streaming_task
+            except asyncio.CancelledError:
+                pass
+            self._streaming_task = None
+        if self._stream_client is not None:
+            try:
+                await self._stream_client.close()
+            except Exception as exc:
+                logger.warning("Failed to close stream client during cleanup: %s", exc)
+            self._stream_client = None
+        self._pending_chunks.clear()
 
     def _broadcast_state(self, state: str, message: str | None) -> None:
         """Broadcast a state update to all connected IPC clients."""

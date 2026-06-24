@@ -69,9 +69,10 @@ async def test_daemon_streaming_recognize_flow(tmp_path: Path) -> None:
     mock_client.close = AsyncMock()
     mock_client.iterate = MagicMock(return_value=_stream_results())
 
-    with patch("qwen3_asr_ime.daemon.service.ASRStreamClient", return_value=mock_client), patch(
-        "qwen3_asr_ime.daemon.service.create_hotkey_listener"
-    ) as mock_hotkey:
+    with (
+        patch("qwen3_asr_ime.daemon.service.ASRStreamClient", return_value=mock_client),
+        patch("qwen3_asr_ime.daemon.service.create_hotkey_listener") as mock_hotkey,
+    ):
         mock_hotkey.return_value.start = MagicMock()
         mock_hotkey.return_value.stop = MagicMock()
 
