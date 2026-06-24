@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -17,13 +17,49 @@ class IMEConfig:
     audio_format: str
     audio_chunk_ms: int
     asr_endpoint: str
-    asr_model: str
+    asr_mode: str              # "offline" | "streaming"
+    asr_model: str             # "0.6B" | "1.7B"
+    asr_backend: str           # "transformers" | "vllm"
     asr_device: str
     asr_quantization: str
     asr_api_key: str
     asr_timeout: float
+    asr_auto_sleep_time: int   # seconds idle before stopping backend (0 = never)
+    asr_backend_wait_timeout: int  # seconds to wait for backend /health
     ipc_socket_path: str
     log_level: str
+
+    _MODEL_PATH_MAP: dict[str, str] = field(
+        default_factory=lambda: {
+            "0.6B": "/Data2/Models/Qwen3-ASR-0.6B",
+            "1.7B": "/Data2/Models/Qwen3-ASR-1.7B",
+        },
+        repr=False,
+        init=False,
+    )
+
+    @property
+    def model_path(self) -> str:
+        return self._MODEL_PATH_MAP.get(self.asr_model, self._MODEL_PATH_MAP["1.7B"])
+
+    @classmethod
+    def _validate(cls, data: dict[str, Any]) -> None:
+        """Cross-validate mode+backend combination. Exits on invalid combo."""
+        mode = data.get("asr_mode", "offline")
+        backend = data.get("asr_backend", "transformers")
+        valid_combos = {
+            ("offline", "transformers"),
+            ("offline", "vllm"),
+            ("streaming", "vllm"),
+        }
+        if (mode, backend) not in valid_combos:
+            import sys
+            print(
+                f"ERROR: 不支持的 mode+backend 组合: mode={mode}, backend={backend}. "
+                f"offline 需 transformers, streaming 需 vllm",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     @classmethod
     def defaults(cls, uid: int | None = None) -> "IMEConfig":
@@ -37,11 +73,15 @@ class IMEConfig:
             audio_format="int16",
             audio_chunk_ms=20,
             asr_endpoint="http://127.0.0.1:8000",
-            asr_model="Qwen/Qwen3-ASR-0.6B",
+            asr_mode="offline",
+            asr_model="1.7B",
+            asr_backend="transformers",
             asr_device="auto",
             asr_quantization="auto",
             asr_api_key="dummy",
             asr_timeout=30.0,
+            asr_auto_sleep_time=300,
+            asr_backend_wait_timeout=120,
             ipc_socket_path=f"{os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{uid}')}/qwen3-asr-ime.sock",
             log_level="INFO",
         )
@@ -63,16 +103,19 @@ class IMEConfig:
             "audio_format": defaults.audio_format,
             "audio_chunk_ms": defaults.audio_chunk_ms,
             "asr_endpoint": defaults.asr_endpoint,
+            "asr_mode": defaults.asr_mode,
             "asr_model": defaults.asr_model,
+            "asr_backend": defaults.asr_backend,
             "asr_device": defaults.asr_device,
             "asr_quantization": defaults.asr_quantization,
             "asr_api_key": defaults.asr_api_key,
             "asr_timeout": defaults.asr_timeout,
+            "asr_auto_sleep_time": defaults.asr_auto_sleep_time,
+            "asr_backend_wait_timeout": defaults.asr_backend_wait_timeout,
             "ipc_socket_path": defaults.ipc_socket_path,
             "log_level": defaults.log_level,
         }
 
-        # Mapping from flat config key -> list of nested keys in the YAML file.
         _KEY_PATHS: dict[str, list[str]] = {
             "hotkey_device": ["hotkey", "device"],
             "hotkey_key": ["hotkey", "key"],
@@ -81,11 +124,15 @@ class IMEConfig:
             "audio_format": ["audio", "format"],
             "audio_chunk_ms": ["audio", "chunk_ms"],
             "asr_endpoint": ["asr", "endpoint"],
+            "asr_mode": ["asr", "mode"],
             "asr_model": ["asr", "model"],
+            "asr_backend": ["asr", "backend"],
             "asr_device": ["asr", "device"],
             "asr_quantization": ["asr", "quantization"],
             "asr_api_key": ["asr", "api_key"],
             "asr_timeout": ["asr", "timeout"],
+            "asr_auto_sleep_time": ["asr", "auto_sleep_time"],
+            "asr_backend_wait_timeout": ["asr", "backend_wait_timeout"],
             "ipc_socket_path": ["ipc", "socket_path"],
             "log_level": ["logging", "level"],
         }
@@ -106,4 +153,5 @@ class IMEConfig:
                 if value is not None:
                     data[flat_key] = value
 
+        cls._validate(data)
         return cls(**data)
