@@ -51,17 +51,6 @@ from qwen3_asr_ime.daemon.recorder import AudioConfig, Recorder
 logger = get_logger(__name__)
 
 
-def _type_text_x11(text: str) -> None:
-    """Type Unicode text into the currently focused X11 window.
-
-    Uses ``pynput.keyboard.Controller.type``, which sends fake key events
-    through the X11 XTEST extension.
-    """
-    from pynput.keyboard import Controller
-
-    Controller().type(text)
-
-
 def _type_incremental_x11(to_delete: int, text: str) -> None:
     """Delete ``to_delete`` characters then type ``text`` into the active window."""
     import time
