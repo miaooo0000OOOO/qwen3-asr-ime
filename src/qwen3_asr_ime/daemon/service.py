@@ -544,14 +544,16 @@ class VoiceInputDaemon:
     def _type_text_final(self, text: str) -> None:
         """Type the final recognized text into the active X11 window.
 
-        Unlike streaming incremental typing, this types the entire text at once.
+        Uses ``_type_incremental_x11`` with zero deletion because
+        ``Controller().type()`` has keycode borrowing limits that fail
+        for long Chinese strings.
         """
         if self._clients:
             return
         if not text:
             return
         self._typed_text = text
-        self._loop.run_in_executor(None, _type_text_x11, text)
+        self._loop.run_in_executor(None, _type_incremental_x11, 0, text)
 
     # ── Config watching and idle management ────────────────────────────
 
